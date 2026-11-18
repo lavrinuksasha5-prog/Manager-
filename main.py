@@ -27,7 +27,7 @@ STATIC_DIR.mkdir(parents=True, exist_ok=True)
 # --- БД ---
 db_file = DATA_DIR / "twks.db"
 if db_file.exists():
-    db_file.unlink() # Удаляем старую базу при старте (смена схемы)
+    db_file.unlink()
 
 engine = create_engine(f"sqlite:///{db_file}")
 Base = declarative_base()
@@ -67,6 +67,9 @@ Base.metadata.create_all(engine)
 class ProxyList(BaseModel):
     text: str
 
+class ProxyUpdate(BaseModel):
+    proxy_text: str
+
 # --- Парсер прокси ---
 def parse_proxy(line: str):
     line = line.strip()
@@ -88,7 +91,7 @@ def parse_proxy(line: str):
     return {"proxy_type": proxy_type, "addr": host, "port": int(port), "username": user, "password": passw}
 
 def pop_free_proxy(db):
-    p = db.query(Proxy).first()
+    p = db.query(Proxy).order_by(Proxy.id.desc()).first()
     if not p: return None, None
     return p, {"proxy_type": p.proxy_type, "addr": p.addr, "port": p.port, "username": p.username, "password": p.password}
 
@@ -161,7 +164,6 @@ async def validate(tdata_path: str, proxy_dict: dict, acc_id: str):
         
         me = await client.get_me()
         
-        # Скачиваем аватарку, если есть
         avatar_url = None
         if me.photo:
             avatar_path = STATIC_DIR / f"avatar_{acc_id}.jpg"
@@ -227,6 +229,28 @@ async def upload_proxies_text(data: ProxyList):
     db.commit(); db.close()
     return {"status": "ok"}
 
+@app.post("/update-proxy/{acc_id}")
+async def update_proxy(acc_id: str, data: ProxyUpdate):
+    p = parse_proxy(data.proxy_text)
+    if not p: return {"status": "error", "message": "Неверный формат прокси"}
+
+    # Проверяем новый прокси
+    proxy_dict = {"proxy_type": p["proxy_type"], "addr": p["addr"], "port": p["port"], "username": p["username"], "password": p["password"]}
+    net_info, ping_ms = await get_proxy_info(proxy_dict)
+
+    db = SessionDB()
+    acc = db.query(Account).filter_by(id=acc_id).first()
+    if acc:
+        acc.proxy = f"{p['addr']}:{p['port']}"
+        acc.ip = net_info["ip"]
+        acc.country = net_info["country"]
+        acc.country_code = net_info["country_code"]
+        acc.proxy_country = net_info["country"]
+        acc.ping = ping_ms
+        db.commit()
+    db.close()
+    return {"status": "ok"}
+
 @app.post("/upload")
 async def upload(bg: BackgroundTasks, file: UploadFile = File(...)):
     dst = UPLOAD_DIR / f"{uuid.uuid4()}.zip"
@@ -259,13 +283,10 @@ async def open_web(acc_id: str):
     acc = db.query(Account).filter_by(id=acc_id).first()
     proxy_row = db.query(Proxy).first()
     db.close()
-    
     if not acc: return {"status": "error", "message": "Аккаунт не найден"}
 
-    # 1. Достаем ключи из сессии
     session_file = SESS_DIR / f"{acc_id}.session"
-    if not session_file.exists():
-        return {"status": "error", "message": "Файл сессии не найден"}
+    if not session_file.exists(): return {"status": "error", "message": "Файл сессии не найден"}
 
     client = TelegramClient(str(session_file), 2040, "b18441a1ff607e10a989891a5462e627")
     await client.connect()
@@ -274,8 +295,6 @@ async def open_web(acc_id: str):
     await client.disconnect()
 
     screenshot_path = STATIC_DIR / f"web_{acc_id}.png"
-    
-    # 2. Настраиваем прокси
     proxy_conf = None
     if proxy_row:
         proxy_conf = {"server": f"socks5://{proxy_row.addr}:{proxy_row.port}"}
@@ -288,20 +307,14 @@ async def open_web(acc_id: str):
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(proxy=proxy_conf)
             page = await context.new_page()
-            
-            # 3. Инжект ключей
             await page.goto("https://web.telegram.org/k/", wait_until="domcontentloaded")
             await page.evaluate(f"""
                 localStorage.setItem('dc{dc_id}_auth_key', '{auth_key}');
                 localStorage.setItem('user_auth', JSON.stringify({{ dcID: {dc_id}, id: '{acc.user_id}' }}));
             """)
-            
-            # 4. Перезагрузка для входа
             await page.reload(wait_until="networkidle", timeout=60000)
-            
             await page.screenshot(path=str(screenshot_path))
             await browser.close()
             return {"status": "ok", "screenshot": f"/static/web_{acc_id}.png"}
     except Exception as e:
-        print(f"[ERR] Web Error: {e}")
         return {"status": "error", "message": str(e)}
