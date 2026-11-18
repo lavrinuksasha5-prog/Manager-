@@ -1,14 +1,13 @@
-import os, uuid, zipfile, random, hashlib, traceback
+import os, uuid, zipfile, random, hashlib, traceback, time, requests
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, String, Integer, DateTime
+from sqlalchemy import create_engine, Column, String, Integer, DateTime, Boolean
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
-from telethon import TelegramClient
 from opentele2.td import TDesktop
 from opentele2.api import API, UseCurrentSession
 
@@ -18,12 +17,6 @@ SESS_DIR = DATA_DIR / "sessions"
 UPLOAD_DIR = Path("/app/uploads")
 SESS_DIR.mkdir(parents=True, exist_ok=True)
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
-DEVICES = [
-    {"device_model": "Windows 10 x64", "system_version": "Windows 10", "app_version": "4.14.4 x64"},
-    {"device_model": "Xiaomi SU7", "system_version": "Android 14", "app_version": "10.14.1"},
-    {"device_model": "iPad Pro", "system_version": "iOS 17.5", "app_version": "10.14.1"},
-]
 
 # --- БД ---
 engine = create_engine(f"sqlite:///{DATA_DIR}/twks.db")
@@ -38,7 +31,14 @@ class Account(Base):
     phone = Column(String, nullable=True)
     device = Column(String)
     proxy = Column(String)
+    proxy_country = Column(String, nullable=True)
+    ip = Column(String, nullable=True)
+    ping = Column(Integer, default=0)
+    country = Column(String, nullable=True)
+    country_code = Column(String, nullable=True)
+    premium = Column(Boolean, default=False)
     status = Column(String, default="pending")
+    error_msg = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class Proxy(Base):
@@ -60,105 +60,99 @@ class ProxyList(BaseModel):
 # --- Парсер прокси ---
 def parse_proxy(line: str):
     line = line.strip()
-    if not line or line.startswith("#"):
-        return None
-
+    if not line or line.startswith("#"): return None
     proxy_type = "socks5"
-    if line.startswith("socks5://"):
-        line = line.replace("socks5://", "")
-    elif line.startswith("http://"):
-        line = line.replace("http://", "")
-        proxy_type = "http"
-    elif line.startswith("https://"):
-        line = line.replace("https://", "")
-        proxy_type = "http"
+    if line.startswith("socks5://"): line = line.replace("socks5://", "")
+    elif line.startswith("http://"): line = line.replace("http://", ""); proxy_type = "http"
+    elif line.startswith("https://"): line = line.replace("https://", ""); proxy_type = "http"
 
     user = passw = None
-
     if "@" in line:
         auth, addr = line.split("@", 1)
-        if ":" in auth:
-            user, passw = auth.split(":", 1)
+        if ":" in auth: user, passw = auth.split(":", 1)
         host, port = addr.split(":")
-    elif line.count(":") == 3:
-        host, port, user, passw = line.split(":")
-    elif line.count(":") == 1:
-        host, port = line.split(":")
-    else:
-        return None
+    elif line.count(":") == 3: host, port, user, passw = line.split(":")
+    elif line.count(":") == 1: host, port = line.split(":")
+    else: return None
 
-    return {
-        "proxy_type": proxy_type,
-        "addr": host,
-        "port": int(port),
-        "username": user,
-        "password": passw,
-    }
+    return {"proxy_type": proxy_type, "addr": host, "port": int(port), "username": user, "password": passw}
 
 def pop_free_proxy(db):
     p = db.query(Proxy).filter_by(busy=0).first()
-    if not p:
-        return None
+    if not p: return None
     p.busy = 1
     db.commit()
-    return {
-        "proxy_type": p.proxy_type,
-        "addr": p.addr,
-        "port": p.port,
-        "username": p.username,
-        "password": p.password,
-    }
+    return {"proxy_type": p.proxy_type, "addr": p.addr, "port": p.port, "username": p.username, "password": p.password}
 
 # --- tdata парсер ---
 def extract_tdata(zip_path: str) -> list:
     out = UPLOAD_DIR / uuid.uuid4().hex
     out.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(zip_path) as zf:
-        zf.extractall(out)
+    with zipfile.ZipFile(zip_path) as zf: zf.extractall(out)
     found = []
     for path in out.rglob("*"):
-        if not path.is_dir():
-            continue
-        if (path / "key_datas").exists() or any(
-            f.name.isupper() and len(f.name) == 16 for f in path.glob("*")
-        ):
+        if not path.is_dir(): continue
+        if (path / "key_datas").exists() or any(f.name.isupper() and len(f.name) == 16 for f in path.glob("*")):
             found.append(str(path))
     return found
 
-# --- Валидатор ---
+# --- Валидатор (Android) ---
 async def validate(tdata_path: str, proxy: dict, acc_id: str):
     tdesk = TDesktop(tdata_path)
     session = str(SESS_DIR / f"{acc_id}.session")
+    if not proxy: raise Exception("Нет свободных прокси")
     
-    print(f"[DEBUG] Конвертация tdata: {tdata_path}")
-    
-    # ИСПРАВЛЕНО: Убраны неверные аргументы из Generate()
+    # ИЗМЕНЕНО НА ANDROID
     client = await tdesk.ToTelethon(
         session, 
         UseCurrentSession,
-        api=API.TelegramDesktop.Generate(unique_id=acc_id)
+        api=API.TelegramAndroid.Generate(unique_id=acc_id)
     )
+    client._proxy = proxy
+
+    # Проверяем IP и пинг прокси
+    start_time = time.time()
+    ip = "N/A"
+    country_code = "UN"
+    try:
+        # Делаем запрос через прокси к ip-api.com
+        import socks, socket
+        from urllib.request import ProxyHandler, build_opener
+        
+        # Грубый запрос для получения IP прокси (можно заменить на нормальный)
+        ip_resp = requests.get("http://ip-api.com/json", 
+            proxies={"http": f"{proxy['proxy_type']}://{proxy['addr']}:{proxy['port']}",
+                     "https": f"{proxy['proxy_type']}://{proxy['addr']}:{proxy['port']}"}, timeout=5)
+        data = ip_resp.json()
+        ip = data.get("query", "N/A")
+        country_code = data.get("countryCode", "UN")
+    except Exception as e:
+        print("[WARN] Не удалось получить IP прокси:", e)
     
-    if proxy:
-        print(f"[DEBUG] Подключаем прокси: {proxy['addr']}:{proxy['port']}")
-        client._proxy = proxy
-    else:
-        print("[WARN] Прокси не найден, подключаемся напрямую")
+    ping = int((time.time() - start_time) * 1000)
 
     await client.connect()
     try:
         if not await client.is_user_authorized():
-            print("[DEBUG] Сессия не авторизована (invalid)")
-            return {"status": "invalid"}
-        
+            return {"status": "invalid", "error_msg": "Сессия не авторизована"}
         me = await client.get_me()
-        print(f"[DEBUG] Успех! Аккаунт: {me.username or me.phone}")
+        
+        # Проверка на Premium (по наличию флага premium у пользователя)
+        is_premium = getattr(me, "premium", False)
+        
         return {
             "status": "valid",
             "user_id": me.id,
             "username": me.username,
             "phone": me.phone,
-            "device": "Telegram Desktop", 
+            "device": "android_9.6.0", # Для отображения на фронте
+            "country": "Португалия", # Заглушка, можно тянуть из ip-api
+            "country_code": country_code,
+            "proxy_country": "Португалия",
+            "ip": ip,
+            "ping": ping,
+            "premium": is_premium,
+            "error_msg": None
         }
     finally:
         await client.disconnect()
@@ -171,51 +165,44 @@ app.mount("/static", StaticFiles(directory="."), name="static")
 async def process_zip(zip_path: str):
     dirs = extract_tdata(zip_path)
     db = SessionDB()
+    existing_phones = {a.phone for a in db.query(Account).all() if a.phone}
+
     for td in dirs:
         acc_id = str(uuid.uuid4())
         proxy = pop_free_proxy(db)
-        print(f"[TEST] Обработка аккаунта {acc_id} | tdata={td}")
+        if not proxy:
+            db.add(Account(id=acc_id, status="error", error_msg="Прокси кончились"))
+            db.commit(); continue
+
         try:
             res = await validate(td, proxy, acc_id)
+            if res.get("phone") and res["phone"] in existing_phones:
+                proxy.busy = 0; db.commit(); continue
+
             db.add(Account(
-                id=acc_id,
-                user_id=res.get("user_id", 0),
-                username=res.get("username"),
-                phone=res.get("phone"),
-                device=res.get("device"),
-                proxy=f"{proxy['addr']}:{proxy['port']}" if proxy else "direct",
-                status=res["status"],
+                id=acc_id, user_id=res.get("user_id"), username=res.get("username"),
+                phone=res.get("phone"), device=res.get("device"),
+                proxy=f"{proxy['addr']}:{proxy['port']}",
+                proxy_country=res.get("proxy_country"), ip=res.get("ip"), ping=res.get("ping"),
+                country=res.get("country"), country_code=res.get("country_code"),
+                premium=res.get("premium"), status=res["status"], error_msg=res.get("error_msg")
             ))
         except Exception as e:
-            print(f"[ERR] Ошибка на аккаунте {acc_id}:")
-            traceback.print_exc()
-            db.add(Account(id=acc_id, status="error", proxy="direct"))
+            db.add(Account(id=acc_id, status="error", proxy="direct", error_msg=str(e)))
         db.commit()
     db.close()
 
 @app.get("/")
-def root():
-    return FileResponse("index.html")
+def root(): return FileResponse("index.html")
 
 @app.post("/proxies-text")
 async def upload_proxies_text(data: ProxyList):
     db = SessionDB()
-    added = 0
     for line in data.text.splitlines():
         p = parse_proxy(line)
-        if p:
-            db.add(Proxy(
-                raw=line.strip(),
-                addr=p["addr"],
-                port=p["port"],
-                username=p["username"],
-                password=p["password"],
-                proxy_type=p["proxy_type"],
-            ))
-            added += 1
-    db.commit()
-    db.close()
-    return {"status": "ok", "added": added}
+        if p: db.add(Proxy(addr=p["addr"], port=p["port"], username=p["username"], password=p["password"], proxy_type=p["proxy_type"]))
+    db.commit(); db.close()
+    return {"status": "ok"}
 
 @app.post("/upload")
 async def upload(bg: BackgroundTasks, file: UploadFile = File(...)):
@@ -230,9 +217,10 @@ def list_accounts():
     rows = db.query(Account).all()
     db.close()
     return [{
-        "id": r.id, "user_id": r.user_id, "username": r.username,
-        "phone": r.phone, "device": r.device, "proxy": r.proxy,
-        "status": r.status, "created_at": str(r.created_at),
+        "id": r.id, "user_id": r.user_id, "username": r.username, "phone": r.phone,
+        "device": r.device, "proxy": r.proxy, "proxy_country": r.proxy_country,
+        "ip": r.ip, "ping": r.ping, "country": r.country, "country_code": r.country_code,
+        "premium": r.premium, "status": r.status, "error_msg": r.error_msg,
     } for r in rows]
 
 @app.delete("/accounts/{acc_id}")
@@ -240,4 +228,4 @@ def delete_account(acc_id: str):
     db = SessionDB()
     db.query(Account).filter_by(id=acc_id).delete()
     db.commit(); db.close()
-    return {"status": "deleted", "id": acc_id}
+    return {"status": "deleted"}
