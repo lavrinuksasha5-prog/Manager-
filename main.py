@@ -248,7 +248,6 @@ def delete_account(acc_id: str):
     db.commit(); db.close()
     return {"status": "deleted"}
 
-# --- Эндпоинт инициализации WebK с изоляцией сессии ---
 @app.get("/tg/k/{acc_id}", response_class=HTMLResponse)
 async def open_telegram_web(acc_id: str):
     db = SessionDB()
@@ -270,7 +269,6 @@ async def open_telegram_web(acc_id: str):
     except Exception as e:
         return f"<h3>Ошибка чтения сессии: {str(e)}</h3>"
 
-    # Перенаправляем на WebK с параметрами токена авторизации через безопасный контейнер
     return f"""
     <!DOCTYPE html>
     <html lang="ru">
@@ -305,7 +303,6 @@ async def open_telegram_web(acc_id: str):
             }}
 
             try {{
-                // Инициализируем хранилище перед открытием официального клиента
                 const dbOpenReq = indexedDB.open('tt-data', 1);
                 dbOpenReq.onupgradeneeded = function(event) {{
                     const db = event.target.result;
@@ -322,7 +319,6 @@ async def open_telegram_web(acc_id: str):
                     store.put(JSON.stringify({{ dcID: dcId, id: userId }}), 'user_auth');
 
                     transaction.oncomplete = function() {{
-                        // Редирект с подгрузкой ключей сессии в iframe-контекст Telegram
                         setTimeout(() => {{
                             window.location.replace("https://web.telegram.org/k/#@PremiumBot");
                         }}, 1000);
