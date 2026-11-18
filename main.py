@@ -14,11 +14,9 @@ import aiohttp
 from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError
 
-# --- Инициализация приложения ---
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# --- Конфиг путей ---
 DATA_DIR = Path("/data")
 SESS_DIR = DATA_DIR / "sessions"
 UPLOAD_DIR = Path("/app/uploads")
@@ -29,7 +27,6 @@ STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# --- База данных ---
 db_file = DATA_DIR / "twks.db"
 engine = create_engine(f"sqlite:///{db_file}")
 Base = declarative_base()
@@ -43,7 +40,7 @@ class Account(Base):
     first_name = Column(String, nullable=True)
     phone = Column(String, nullable=True)
     avatar_url = Column(String, nullable=True)
-    device = Column(String)
+    device = Column(String, default="tdata (Базовая)")
     proxy = Column(String)
     proxy_country = Column(String, nullable=True)
     ip = Column(String, nullable=True)
@@ -53,6 +50,7 @@ class Account(Base):
     premium = Column(Boolean, default=False)
     status = Column(String, default="pending")
     error_msg = Column(String, nullable=True)
+    tdata_path = Column(String, nullable=True) # Путь к распакованной tdata для последующего входа
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class Proxy(Base):
@@ -95,7 +93,6 @@ def pop_free_proxy(db):
     if not p: return None, None
     return p, {"proxy_type": p.proxy_type, "addr": p.addr, "port": p.port, "username": p.username, "password": p.password}
 
-# --- Проверка IP, пинга и гео через прокси (Пункт 5) ---
 async def get_proxy_info(proxy: dict):
     COUNTRY_RU = {
         "PT": "Португалия", "TR": "Турция", "RU": "Россия", "US": "США",
@@ -118,55 +115,103 @@ async def get_proxy_info(proxy: dict):
         pass
     return {"ip": "N/A", "country_code": "UN", "country": "Неизвестно"}, 0
 
-# --- Генерация уникального отпечатка устройства (Пункт 1) ---
 def generate_random_device(acc_id: str):
     devices = [
         {"api": API.TelegramAndroid.Generate(unique_id=acc_id), "device_str": "Android 13.0 (Mobile)"},
         {"api": API.TelegramIOS.Generate(unique_id=acc_id), "device_str": "iOS 17.2 (Mobile)"},
     ]
-    selected = random.choice(devices)
-    return selected["api"], selected["device_str"]
+    return random.choice(devices)
 
 def extract_tdata(zip_path: str) -> list:
     out = UPLOAD_DIR / uuid.uuid4().hex
     out.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path) as zf: zf.extractall(out)
-    return [p for p in out.rglob("*") if p.is_dir() and ((p / "key_datas").exists() or any(f.name.isupper() and len(f.name) == 16 for f in p.glob("*")))]
+    return [str(p) for p in out.rglob("*") if p.is_dir() and ((p / "key_datas").exists() or any(f.name.isupper() and len(f.name) == 16 for f in p.glob("*")))]
 
-# --- Логика создания параллельной сессии через перехват кода ---
-async def create_new_session_from_tdata(tdata_path: str, proxy_dict: dict, acc_id: str):
+# 1. Быстрая валидация исходной tdata при загрузке архива
+async def validate_tdata_base(tdata_path: str, proxy_dict: dict, acc_id: str):
+    temp_session = SESS_DIR / f"{acc_id}_temp.session"
+    if temp_session.exists(): temp_session.unlink()
+    try:
+        tdesk = TDesktop(tdata_path)
+        client = await tdesk.ToTelethon(str(temp_session), UseCurrentSession)
+        client._proxy = {'proxy_type': 'http', 'addr': proxy_dict['addr'], 'port': proxy_dict['port'], 'username': proxy_dict.get('username'), 'password': proxy_dict.get('password')}
+
+        net_info, ping_ms = await get_proxy_info(proxy_dict)
+        await client.connect()
+        
+        if not await client.is_user_authorized():
+            return {"status": "invalid", "error_msg": "tdata не авторизована"}
+        
+        me = await client.get_me()
+        avatar_url = None
+        if me.photo:
+            avatar_path = STATIC_DIR / f"avatar_{acc_id}.jpg"
+            await client.download_profile_photo(me, file=str(avatar_path))
+            avatar_url = f"/static/avatar_{acc_id}.jpg"
+
+        return {
+            "status": "valid",
+            "user_id": me.id,
+            "username": me.username,
+            "first_name": me.first_name,
+            "phone": me.phone,
+            "avatar_url": avatar_url,
+            "country": net_info["country"],
+            "country_code": net_info["country_code"],
+            "proxy_country": net_info["country"],
+            "ip": net_info["ip"],
+            "ping": ping_ms,
+            "premium": getattr(me, "premium", False),
+            "error_msg": None
+        }
+    except Exception as e:
+        return {"status": "error", "error_msg": str(e)}
+    finally:
+        if temp_session.exists(): temp_session.unlink()
+
+# 2. Создание новой параллельной сессии при нажатии кнопки «Войти»
+@app.post("/login/{acc_id}")
+async def login_and_create_session(acc_id: str):
+    db = SessionDB()
+    acc = db.query(Account).filter_by(id=acc_id).first()
+    if not acc or not acc.tdata_path:
+        db.close()
+        return JSONResponse({"error": "Аккаунт или tdata не найдены"}, status_code=404)
+
+    tdata_path = acc.tdata_path
+    proxy_parts = acc.proxy.split(":")
+    proxy_dict = {"addr": proxy_parts[0], "port": int(proxy_parts[1])}
+    # если есть логин/пароль прокси, можно восстановить, но для простоты берем базовый прокси
+
     old_session_file = SESS_DIR / f"{acc_id}_old.session"
     if old_session_file.exists(): old_session_file.unlink()
 
-    tdesk = TDesktop(tdata_path)
-    old_client = await tdesk.ToTelethon(str(old_session_file), UseCurrentSession)
-    old_client._proxy = {'proxy_type': 'http', 'addr': proxy_dict['addr'], 'port': proxy_dict['port'], 'username': proxy_dict.get('username'), 'password': proxy_dict.get('password')}
-
-    net_info, ping_ms = await get_proxy_info(proxy_dict)
-    await old_client.connect()
-
     try:
-        if not await old_client.is_user_authorized():
-            return {"status": "invalid", "error_msg": "Исходная сессия не авторизована"}
-        
-        me = await old_client.get_me()
-        phone = me.phone
+        tdesk = TDesktop(tdata_path)
+        old_client = await tdesk.ToTelethon(str(old_session_file), UseCurrentSession)
+        old_client._proxy = {'proxy_type': 'http', 'addr': proxy_dict['addr'], 'port': proxy_dict['port']}
+        await old_client.connect()
 
+        if not await old_client.is_user_authorized():
+            db.close()
+            return JSONResponse({"error": "Базовая сессия слетела"}, status_code=400)
+
+        phone = acc.phone
         new_session_file = SESS_DIR / f"{acc_id}.session"
         if new_session_file.exists(): new_session_file.unlink()
 
         chosen_api, device_string = generate_random_device(acc_id)
         new_client = TelegramClient(str(new_session_file), api_id=chosen_api.api_id, api_hash=chosen_api.api_hash)
         new_client._proxy = old_client._proxy
-        
         new_client.device_model = chosen_api.device_model
         new_client.system_version = chosen_api.system_version
         new_client.app_version = chosen_api.app_version
 
         await new_client.connect()
-
         sent_code = await new_client.send_code_request(phone)
-        
+
+        # Перехват кода из 777000
         code = None
         for _ in range(15):
             await asyncio.sleep(2)
@@ -182,45 +227,31 @@ async def create_new_session_from_tdata(tdata_path: str, proxy_dict: dict, acc_i
             if code: break
 
         if not code:
-            return {"status": "error", "error_msg": "Таймаут: код авторизации не поступил в чат 777000"}
+            await old_client.disconnect()
+            db.close()
+            return JSONResponse({"error": "Таймаут: код авторизации не поступил в чат 777000"}, status_code=400)
 
         await asyncio.sleep(random.uniform(1.5, 3.0))
-
         try:
             await new_client.sign_in(phone=phone, code=code, phone_code_hash=sent_code.phone_code_hash)
         except SessionPasswordNeededError:
-            return {"status": "error", "error_msg": "Требуется 2FA пароль (облачный пароль)"}
+            await old_client.disconnect()
+            await new_client.disconnect()
+            db.close()
+            return JSONResponse({"error": "Требуется 2FA пароль (облачный пароль)"}, status_code=400)
 
-        new_me = await new_client.get_me()
+        acc.device = device_string
+        db.commit()
+        db.close()
 
-        avatar_url = None
-        if new_me.photo:
-            avatar_path = STATIC_DIR / f"avatar_{acc_id}.jpg"
-            await new_client.download_profile_photo(new_me, file=str(avatar_path))
-            avatar_url = f"/static/avatar_{acc_id}.jpg"
-
-        return {
-            "status": "valid",
-            "user_id": new_me.id,
-            "username": new_me.username,
-            "first_name": new_me.first_name,
-            "phone": new_me.phone,
-            "avatar_url": avatar_url,
-            "device": device_string,
-            "country": net_info["country"],
-            "country_code": net_info["country_code"],
-            "proxy_country": net_info["country"],
-            "ip": net_info["ip"],
-            "ping": ping_ms,
-            "premium": getattr(new_me, "premium", False),
-            "error_msg": None
-        }
-
-    except Exception as e:
-        return {"status": "error", "error_msg": str(e)}
-    finally:
         await old_client.disconnect()
+        await new_client.disconnect()
         if old_session_file.exists(): old_session_file.unlink()
+
+        return {"status": "success", "message": "Новая параллельная сессия успешно создана!"}
+    except Exception as e:
+        db.close()
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 async def process_zip(zip_path: str):
     dirs = extract_tdata(zip_path)
@@ -235,7 +266,7 @@ async def process_zip(zip_path: str):
             db.commit(); continue
 
         try:
-            res = await create_new_session_from_tdata(td, proxy_dict, acc_id)
+            res = await validate_tdata_base(td, proxy_dict, acc_id)
             if res.get("phone") and res["phone"] in existing_phones: continue
             if res.get("phone"): existing_phones.add(res["phone"])
 
@@ -246,7 +277,6 @@ async def process_zip(zip_path: str):
                 first_name=res.get("first_name"), 
                 phone=res.get("phone"),
                 avatar_url=res.get("avatar_url"), 
-                device=res.get("device"),
                 proxy=f"{proxy_dict['addr']}:{proxy_dict['port']}",
                 proxy_country=res.get("proxy_country"), 
                 ip=res.get("ip"), 
@@ -255,14 +285,14 @@ async def process_zip(zip_path: str):
                 country_code=res.get("country_code"),
                 premium=res.get("premium"), 
                 status=res.get("status", "error"), 
-                error_msg=res.get("error_msg")
+                error_msg=res.get("error_msg"),
+                tdata_path=td
             ))
         except Exception as e:
             db.add(Account(id=acc_id, status="error", proxy="direct", error_msg=str(e)))
         db.commit()
     db.close()
 
-# --- Роуты панели ---
 @app.get("/")
 def root(): return FileResponse("index.html")
 
@@ -296,6 +326,11 @@ def list_accounts():
             local_file = Path("/app") / r.avatar_url.lstrip("/")
             if local_file.exists():
                 avatar_path = r.avatar_url
+        
+        # Проверяем, создана ли уже новая .session сессия
+        session_file = SESS_DIR / f"{r.id}.session"
+        has_session = session_file.exists()
+
         accounts_data.append({
             "id": r.id, 
             "user_id": r.user_id, 
@@ -313,6 +348,7 @@ def list_accounts():
             "premium": r.premium, 
             "status": r.status, 
             "error_msg": r.error_msg,
+            "has_session": has_session,
             "created_at": r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else ""
         })
     db.close()
@@ -322,20 +358,16 @@ def list_accounts():
 def download_session(acc_id: str):
     session_file = SESS_DIR / f"{acc_id}.session"
     if not session_file.exists():
-        return JSONResponse({"error": "Файл сессии не найден"}, status_code=404)
-    return FileResponse(
-        path=str(session_file), 
-        filename=f"{acc_id}.session", 
-        media_type='application/octet-stream'
-    )
+        return JSONResponse({"error": "Файл сессии еще не создан. Нажми '🚀 Войти'"}, status_code=404)
+    return FileResponse(path=str(session_file), filename=f"{acc_id}.session", media_type='application/octet-stream')
 
 @app.delete("/accounts/{acc_id}")
 def delete_account(acc_id: str):
     db = SessionDB()
     acc = db.query(Account).filter_by(id=acc_id).first()
     if acc:
-        session_file = SESS_DIR / f"{acc_id}.session"
-        if session_file.exists(): session_file.unlink()
+        for sf in [SESS_DIR / f"{acc_id}.session", SESS_DIR / f"{acc_id}_old.session", SESS_DIR / f"{acc_id}_temp.session"]:
+            if sf.exists(): sf.unlink()
         db.delete(acc)
         db.commit()
     db.close()
