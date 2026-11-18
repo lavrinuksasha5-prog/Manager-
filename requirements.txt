@@ -6,6 +6,6 @@ sqlalchemy==2.0.35
 pydantic==2.9.2
 opentele2
 PySocks
-playwright
+playwright==1.40.0
 aiohttp
 aiohttp-socks
