@@ -1,14 +1,15 @@
-import os, uuid, time, aiohttp, zipfile, shutil, sqlite3, socks, json, base64
+import os, uuid, time, aiohttp, zipfile, shutil, sqlite3, socks, json, base64, io
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, String, Integer, DateTime, Boolean, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 from telethon import TelegramClient, functions
+from playwright.async_api import async_playwright
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -26,7 +27,7 @@ STATIC_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 db_file = DATA_DIR / "twks_sessions.db"
-engine = create_engine(f"sqlite:///{db_file}")
+engine = create_engine(f"sqlite:///{db_file}", connect_args={"check_same_thread": False})
 Base = declarative_base()
 SessionDB = sessionmaker(bind=engine)
 
@@ -67,6 +68,9 @@ with engine.begin() as conn:
 
 class ProxyList(BaseModel):
     text: str
+
+# --- ХРАНИЛИЩЕ БРАУЗЕРОВ ---
+active_browsers = {}
 
 def parse_proxy(line: str):
     line = line.strip().rstrip('/')
@@ -322,59 +326,83 @@ def list_accounts():
     db.close()
     return out
 
-@app.post("/auth/open/{acc_id}")
-async def open_web_session(acc_id: str):
+# --- УПРАВЛЕНИЕ БРАУЗЕРОМ ---
+@app.post("/auth/start_browser/{acc_id}")
+async def start_browser_session(acc_id: str):
     db = SessionDB()
     acc = db.query(Account).filter_by(id=acc_id).first()
     if not acc:
         db.close()
         return JSONResponse({"error": "Аккаунт не найден"}, status_code=404)
-    
-    session_path = SESS_DIR / f"{acc_id}.session"
-    if not session_path.exists():
-        db.close()
-        return JSONResponse({"error": "Файл сессии не найден"}, status_code=404)
 
     proxy_dict = get_db_proxy(acc.proxy)
-    proxy_tuple = get_telethon_proxy_tuple(proxy_dict) if proxy_dict else None
-    
-    API_ID = 2040
-    API_HASH = "b18441a1ff607e10a989891a5462e627"
+    session_path = SESS_DIR / f"{acc_id}.session"
 
     try:
-        # Устанавливаем быстрые таймауты, чтобы клиент не висел
-        client = TelegramClient(str(session_path), api_id=API_ID, api_hash=API_HASH, proxy=proxy_tuple, connection_retries=2, timeout=5)
+        client = TelegramClient(str(session_path), api_id=2040, api_hash="b18441a1ff607e10a989891a5462e627", proxy=get_telethon_proxy_tuple(proxy_dict))
         await client.connect()
-        
-        tok = await client(functions.auth.ExportLoginTokenRequest(api_id=API_ID, api_hash=API_HASH, except_ids=[]))
+        tok = await client(functions.auth.ExportLoginTokenRequest(api_id=2040, api_hash="b18441a1ff607e10a989891a5462e627", except_ids=[]))
         await client.disconnect()
-        
-        if hasattr(tok, 'token'):
-            token_b64 = base64.urlsafe_b64encode(tok.token).decode('utf-8').rstrip('=')
-            web_url = f"https://web.telegram.org/k/#auth={token_b64}"
-        else:
-            web_url = "https://web.telegram.org/k/"
+
+        token_b64 = base64.urlsafe_b64encode(tok.token).decode('utf-8').rstrip('=')
+        web_url = f"https://web.telegram.org/k/#auth={token_b64}"
+
+        # Запуск Playwright с прокси
+        p = await async_playwright().start()
+        proxy_settings = {}
+        if proxy_dict:
+            proxy_settings = {
+                "server": f"{proxy_dict['proxy_type']}://{proxy_dict['addr']}:{proxy_dict['port']}",
+                "username": proxy_dict.get("username"),
+                "password": proxy_dict.get("password")
+            }
+
+        browser = await p.chromium.launch(headless=True, proxy=proxy_settings)
+        context = await browser.new_context(viewport={"width": 1024, "height": 768})
+        page = await context.new_page()
+        await page.goto(web_url)
+
+        active_browsers[acc_id] = {"p": p, "browser": browser, "context": context, "page": page}
 
         acc.is_active_web = True
         db.commit()
         db.close()
-        return {"status": "success", "url": web_url}
+        return {"status": "ok"}
     except Exception as e:
         db.close()
-        return JSONResponse({"error": f"Ошибка соединения с прокси/Telegram: {str(e)}"}, status_code=500)
+        return JSONResponse({"error": str(e)}, status_code=500)
 
-@app.post("/auth/close/{acc_id}")
-async def close_web_session(acc_id: str):
+@app.get("/auth/screenshot/{acc_id}")
+async def get_screenshot(acc_id: str):
+    if acc_id not in active_browsers:
+        return JSONResponse({"error": "Браузер не запущен"}, status_code=404)
+    page = active_browsers[acc_id]["page"]
+    screenshot_bytes = await page.screenshot(type='jpeg', quality=70)
+    return StreamingResponse(io.BytesIO(screenshot_bytes), media_type="image/jpeg")
+
+@app.post("/auth/click/{acc_id}")
+async def click_in_browser(acc_id: str, x: int, y: int):
+    if acc_id not in active_browsers:
+        return JSONResponse({"error": "Браузер не запущен"}, status_code=404)
+    page = active_browsers[acc_id]["page"]
+    await page.mouse.click(x, y)
+    return {"status": "ok"}
+
+@app.post("/auth/close_browser/{acc_id}")
+async def close_browser_session(acc_id: str):
+    if acc_id in active_browsers:
+        sess = active_browsers[acc_id]
+        await sess["browser"].close()
+        await sess["p"].stop()
+        del active_browsers[acc_id]
+    
     db = SessionDB()
     acc = db.query(Account).filter_by(id=acc_id).first()
-    if not acc:
-        db.close()
-        return JSONResponse({"error": "Аккаунт не найден"}, status_code=404)
-    
-    acc.is_active_web = False
-    db.commit()
+    if acc:
+        acc.is_active_web = False
+        db.commit()
     db.close()
-    return {"status": "success", "message": "Сеанс успешно закрыт."}
+    return {"status": "ok"}
 
 @app.get("/download/{acc_id}")
 def download_session(acc_id: str):
