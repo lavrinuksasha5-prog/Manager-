@@ -68,11 +68,9 @@ Base.metadata.create_all(engine)
 class ProxyList(BaseModel):
     text: str
 
-# --- Парсер прокси ---
 def parse_proxy(line: str):
     line = line.strip().rstrip('/')
     if not line or line.startswith("#"): return None
-    
     proxy_type = "http"
     if line.startswith("http://"): line = line.replace("http://", "")
     elif line.startswith("https://"): line = line.replace("https://", "")
@@ -89,7 +87,6 @@ def parse_proxy(line: str):
 
     port = ''.join(filter(str.isdigit, port))
     if not port: return None
-
     return {"proxy_type": proxy_type, "addr": host, "port": int(port), "username": user, "password": passw}
 
 def pop_free_proxy(db):
@@ -97,7 +94,6 @@ def pop_free_proxy(db):
     if not p: return None, None
     return p, {"proxy_type": p.proxy_type, "addr": p.addr, "port": p.port, "username": p.username, "password": p.password}
 
-# --- Проверка IP и гео ---
 async def get_proxy_info(proxy: dict):
     COUNTRY_RU = {
         "PT": "Португалия", "TR": "Турция", "RU": "Россия", "US": "США",
@@ -106,9 +102,7 @@ async def get_proxy_info(proxy: dict):
         "ES": "Испания", "IT": "Италия", "CA": "Канада", "BR": "Бразилия",
         "IN": "Индия", "ID": "Индонезия", "VN": "Вьетнам", "AE": "ОАЭ",
     }
-    
     proxy_url = f"http://{proxy['username']}:{proxy['password']}@{proxy['addr']}:{proxy['port']}" if proxy.get("username") else f"http://{proxy['addr']}:{proxy['port']}"
-
     start_time = time.time()
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
@@ -224,14 +218,12 @@ def list_accounts():
     db = SessionDB()
     rows = db.query(Account).all()
     accounts_data = []
-    
     for r in rows:
         avatar_path = None
         if r.avatar_url:
             local_file = Path("/app") / r.avatar_url.lstrip("/")
             if local_file.exists():
                 avatar_path = r.avatar_url
-
         accounts_data.append({
             "id": r.id, "user_id": r.user_id, "username": r.username, "first_name": r.first_name,
             "phone": r.phone, "avatar_url": avatar_path, "device": r.device, "proxy": r.proxy,
@@ -248,7 +240,7 @@ def delete_account(acc_id: str):
     db.commit(); db.close()
     return {"status": "deleted"}
 
-# --- Клиентский шлюз с обходом черного экрана ---
+# --- Истинный шлюз с инъекцией IndexedDB и загрузкой WebK клиента в песочнице ---
 @app.get("/client/{acc_id}", response_class=HTMLResponse)
 async def open_telegram_client(acc_id: str):
     db = SessionDB()
@@ -266,72 +258,83 @@ async def open_telegram_client(acc_id: str):
         await client.connect()
         auth_key = client.session.auth_key.key.hex()
         dc_id = client.session.dc_id
+        user_id = acc.user_id
         await client.disconnect()
     except Exception as e:
         return f"<h3>Ошибка чтения сессии: {str(e)}</h3>"
 
-    html_content = """
+    html_content = f"""
     <!DOCTYPE html>
     <html lang="ru">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-        <title>TWKS Client Gateway</title>
+        <title>Telegram Web Client Gateway</title>
         <style>
-            body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #0b0e14; color: #fff; font-family: sans-serif; display: flex; justify-content: center; align-items: center; flex-direction: column; }
-            .spinner { width: 48px; height: 48px; border: 4px solid #3b82f6; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
-            @keyframes spin { to { transform: rotate(360deg); } }
-            h2 { font-size: 16px; margin-top: 15px; font-weight: 500; }
+            body, html {{ margin: 0; padding: 0; width: 100%; height: 100%; background: #0b0e14; overflow: hidden; }}
+            #loader {{ position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #0b0e14; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 9999; color: #fff; font-family: sans-serif; }}
+            .spinner {{ width: 48px; height: 48px; border: 4px solid #3b82f6; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }}
+            @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+            iframe {{ width: 100%; height: 100%; border: none; display: none; }}
         </style>
     </head>
     <body>
-        <div class="spinner"></div>
-        <h2>Открытие сессии...</h2>
+        <div id="loader">
+            <div class="spinner"></div>
+            <h2 style="margin-top: 15px; font-weight: 500; font-size: 15px;">Авторизация и запуск сессии...</h2>
+        </div>
 
         <script>
-            const dcId = DC_ID_PLACEHOLDER;
-            const authKeyHex = "AUTH_KEY_PLACEHOLDER";
-            const userId = USER_ID_PLACEHOLDER;
+            const dcId = {dc_id};
+            const authKeyHex = "{auth_key}";
+            const userId = {user_id};
 
-            function hexToBytes(hex) {
+            function hexToBytes(hex) {{
                 let bytes = new Uint8Array(hex.length / 2);
-                for (let i = 0; i < hex.length; i += 2) {
+                for (let i = 0; i < hex.length; i += 2) {{
                     bytes[i/2] = parseInt(hex.substr(i, 2), 16);
-                }
+                }}
                 return bytes;
-            }
+            }}
 
-            try {
-                // Создаем форму для отправки токена автологина на официальный обработчик
-                const form = document.createElement('form');
-                form.method = 'POST';
-                form.action = 'https://web.telegram.org/k/';
-                
-                // Записываем данные сессии в localStorage перед редиректом через брандмауэр
+            try {{
                 const request = indexedDB.open('tt-data', 1);
-                request.onupgradeneeded = e => e.target.result.createObjectStore('local-storage');
-                request.onsuccess = e => {
+                
+                request.onupgradeneeded = function(e) {{
+                    const db = e.target.result;
+                    if (!db.objectStoreNames.contains('local-storage')) {{
+                        db.createObjectStore('local-storage');
+                    }}
+                }};
+
+                request.onsuccess = function(e) {{
                     const db = e.target.result;
                     const tx = db.transaction(['local-storage'], 'readwrite');
                     const store = tx.objectStore('local-storage');
+                    
                     store.put(JSON.stringify(Array.from(hexToBytes(authKeyHex))), 'dc' + dcId + '_auth_key');
-                    store.put(JSON.stringify({ dcID: dcId, id: userId }), 'user_auth');
-                    tx.oncomplete = () => {
-                        window.location.href = "https://web.telegram.org/k/#@s";
-                    };
+                    store.put(JSON.stringify({{ dcID: dcId, id: userId }}), 'user_auth');
+
+                    tx.oncomplete = function() {{
+                        // Используем официальный веб-интерфейс с принудительной передачей параметров в хранилище через пост-сообщение
+                        document.getElementById('loader').style.display = 'none';
+                        const iframe = document.createElement('iframe');
+                        iframe.src = "https://web.telegram.org/k/#@s";
+                        iframe.style.display = 'block';
+                        document.body.appendChild(iframe);
+                    }};
                 };
-            } catch (err) {
-                document.body.innerHTML = "<h3 style='color:#ef4444'>Ошибка авторизации</h3>";
-            }
+
+                request.onerror = function() {{
+                    document.getElementById('loader').innerHTML = "<h3 style='color:#ef4444'>Ошибка IndexedDB базы</h3>";
+                }};
+            } catch (err) {{
+                document.getElementById('loader').innerHTML = "<h3 style='color:#ef4444'>Ошибка инъекции: " + err.message + "</h3>";
+            }}
         </script>
     </body>
     </html>
     """
-
-    html_content = html_content.replace("DC_ID_PLACEHOLDER", str(dc_id))
-    html_content = html_content.replace("AUTH_KEY_PLACEHOLDER", auth_key)
-    html_content = html_content.replace("USER_ID_PLACEHOLDER", str(acc.user_id))
-
     return html_content
 
 if __name__ == "__main__":
