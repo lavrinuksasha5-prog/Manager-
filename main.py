@@ -6,7 +6,8 @@ from sqlalchemy import create_engine, Column, String, Integer, DateTime
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 from telethon import TelegramClient
-from tdata_reader import TDataReader
+from opentele2.td import TDesktop
+from opentele2.api import API
 
 # --- Конфиг ---
 API_ID = 2040
@@ -54,7 +55,6 @@ Base.metadata.create_all(engine)
 
 # --- Парсер прокси (все форматы) ---
 def parse_proxy(line: str):
-    """RU: парсит любой формат прокси"""
     line = line.strip()
     if not line or line.startswith("#"):
         return None
@@ -93,7 +93,6 @@ def parse_proxy(line: str):
     }
 
 def pop_free_proxy(db):
-    """RU: достать свободный прокси из БД и пометить занятым"""
     p = db.query(Proxy).filter_by(busy=0).first()
     if not p:
         return None
@@ -125,18 +124,24 @@ def extract_tdata(zip_path: str) -> list:
 
 # --- Валидатор ---
 async def validate(tdata_path: str, proxy: dict, acc_id: str):
-    reader = TDataReader(tdata_path)
-    acc = reader.read()
+    # RU: инициализация клиента через opentele2
+    tdesk = TDesktop(tdata_path)
     dev = random.choice(DEVICES)
     session = str(SESS_DIR / f"{acc_id}.session")
-    client = TelegramClient(
-        session, API_ID, API_HASH, proxy=proxy,
-        device_model=dev["device_model"],
-        system_version=dev["system_version"],
-        app_version=dev["app_version"],
+    
+    # RU: конвертация tdata в Telethon сессию
+    client = await tdesk.ToTelethon(
+        session, 
+        api=API.TelegramDesktop.Generate(
+            api_id=API_ID, 
+            api_hash=API_HASH, 
+            device_model=dev["device_model"], 
+            system_version=dev["system_version"],
+            app_version=dev["app_version"]
+        ),
+        proxy=proxy
     )
-    client.session.set_dc(acc.dc_id, "149.154.167.51", 443)
-    client.session.auth_key = acc.auth_key
+    
     await client.connect()
     try:
         if not await client.is_user_authorized():
@@ -144,7 +149,7 @@ async def validate(tdata_path: str, proxy: dict, acc_id: str):
         me = await client.get_me()
         return {
             "status": "valid",
-            "user_id": acc.user_id,
+            "user_id": me.id,
             "username": me.username,
             "phone": me.phone,
             "device": dev["device_model"],
@@ -185,7 +190,6 @@ def root():
 
 @app.post("/proxies")
 async def upload_proxies(file: UploadFile = File(...)):
-    """RU: загрузка списка проксей (любой формат, по одной в строке)"""
     content = (await file.read()).decode("utf-8")
     db = SessionDB()
     added = 0
