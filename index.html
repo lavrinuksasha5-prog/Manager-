@@ -5,19 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>TWKS - Session Manager</title>
     <style>
-        :root {
-            --bg-color: #0b0e14;
-            --panel-bg: #121824;
-            --border-color: #1e293b;
-            --text-main: #f8fafc;
-            --text-muted: #94a3b8;
-            --accent: #3b82f6;
-            --accent-hover: #2563eb;
-            --danger: #ef4444;
-            --success: #22c55e;
-            --warning: #f59e0b;
-        }
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        :root { --bg-color: #0b0e14; --panel-bg: #121824; --border-color: #1e293b; --text-main: #f8fafc; --text-muted: #94a3b8; --accent: #3b82f6; --accent-hover: #2563eb; --danger: #ef4444; --success: #22c55e; --warning: #f59e0b; }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, sans-serif; }
         body { background-color: var(--bg-color); color: var(--text-main); padding: 12px; }
         .container { width: 100%; max-width: 1400px; margin: 0 auto; }
         h1 { font-size: 18px; margin-bottom: 12px; font-weight: 600; }
@@ -33,15 +22,22 @@
         table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; min-width: 900px; }
         th, td { padding: 10px 12px; border-bottom: 1px solid var(--border-color); white-space: nowrap; }
         th { background: #0f1520; color: var(--text-muted); font-weight: 500; }
-        .badge { padding: 3px 6px; border-radius: 6px; font-size: 10px; font-weight: 500; display: inline-block; cursor: pointer; }
-        .badge-valid { background: rgba(34,197,94,0.1); color: var(--success); cursor: default; }
-        .badge-error { background: rgba(239,68,68,0.1); color: var(--danger); }
+        .badge { padding: 3px 6px; border-radius: 6px; font-size: 10px; font-weight: 500; display: inline-block; }
+        .badge-valid { background: rgba(34,197,94,0.1); color: var(--success); }
+        .badge-error { background: rgba(239,68,68,0.1); color: var(--danger); cursor: pointer; }
         .actions { display: flex; gap: 6px; align-items: center; }
         .btn-sm { padding: 6px 10px; font-size: 11px; width: auto; }
         .btn-success { background: rgba(34,197,94,0.2); color: var(--success); }
         .btn-warning { background: rgba(245,158,11,0.2); color: var(--warning); }
         .btn-danger { background: rgba(239,68,68,0.2); color: var(--danger); }
         .avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
+        
+        /* Стили для модалки браузера */
+        #browserModal { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:black; z-index:9999; flex-direction:column; }
+        #browserModal .top-bar { padding:10px; background:#1e293b; text-align:right; display: flex; justify-content: space-between; align-items: center; }
+        #browserModal .top-bar span { font-size: 14px; font-weight: 600; color: white; }
+        #browserModal button { width: auto; background:#ef4444; padding: 8px 16px; }
+        #browserScreen { width:100%; flex-grow:1; object-fit:contain; cursor:crosshair; background: #000; }
     </style>
 </head>
 <body>
@@ -51,7 +47,7 @@
         <div class="grid">
             <div class="card">
                 <h2>1. Загрузка прокси (ip:port:user:pass)</h2>
-                <textarea id="proxyInput" placeholder="Вставляй прокси сюда..."></textarea>
+                <textarea id="proxyInput" placeholder="socks5://user:pass@ip:port"></textarea>
                 <button onclick="uploadProxies()">Загрузить прокси в базу</button>
             </div>
             
@@ -85,7 +81,19 @@
         </div>
     </div>
 
+    <!-- Модальное окно для удаленного браузера -->
+    <div id="browserModal">
+        <div class="top-bar">
+            <span>Удаленный браузер (Прокси активен)</span>
+            <button onclick="closeBrowser()">Закрыть браузер</button>
+        </div>
+        <img id="browserScreen" onclick="handleScreenClick(event)">
+    </div>
+
     <script>
+        let currentBrowserId = null;
+        let browserInterval = null;
+
         async function loadAccounts() {
             try {
                 const res = await fetch('/accounts');
@@ -112,8 +120,8 @@
                         <td>
                             <div class="actions">
                                 ${acc.is_active_web 
-                                    ? `<button class="btn-sm btn-warning" onclick="closeSession('${acc.id}')">🔴 Закрыть</button>`
-                                    : `<button class="btn-sm btn-success" onclick="openSession('${acc.id}')">🟢 Открыть веб</button>`
+                                    ? `<button class="btn-sm btn-warning" onclick="closeBrowser('${acc.id}')">🔴 Закрыть</button>`
+                                    : `<button class="btn-sm btn-success" onclick="openBrowser('${acc.id}')">🟢 Открыть веб</button>`
                                 }
                             </div>
                         </td>
@@ -128,22 +136,43 @@
             } catch (err) { console.error(err); }
         }
 
-        async function openSession(id) {
-            const res = await fetch(`/auth/open/${id}`, { method: 'POST' });
+        async function openBrowser(id) {
+            const res = await fetch(`/auth/start_browser/${id}`, { method: 'POST' });
             const data = await res.json();
-            if (data.url) {
-                // Моментальный редирект на Telegram Web в текущем окне (без блокировки всплывающих окон)
-                window.location.href = data.url;
+            if (data.status === 'ok') {
+                currentBrowserId = id;
+                document.getElementById('browserModal').style.display = 'flex';
+                document.getElementById('browserScreen').src = `/auth/screenshot/${id}?t=${Date.now()}`;
+                
+                // Обновляем экран каждые 800мс
+                browserInterval = setInterval(() => {
+                    document.getElementById('browserScreen').src = `/auth/screenshot/${id}?t=${Date.now()}`;
+                }, 800);
             } else {
-                alert(data.error || 'Ошибка открытия сеанса');
-                loadAccounts();
+                alert(data.error || 'Ошибка запуска браузера');
             }
         }
 
-        async function closeSession(id) {
-            const res = await fetch(`/auth/close/${id}`, { method: 'POST' });
-            const data = await res.json();
+        async function closeBrowser(id = null) {
+            const targetId = id || currentBrowserId;
+            if (!targetId) return;
+            
+            clearInterval(browserInterval);
+            document.getElementById('browserModal').style.display = 'none';
+            currentBrowserId = null;
+            
+            await fetch(`/auth/close_browser/${targetId}`, { method: 'POST' });
             loadAccounts();
+        }
+
+        async function handleScreenClick(e) {
+            if (!currentBrowserId) return;
+            const rect = e.target.getBoundingClientRect();
+            // Пересчитываем координаты клика под размеры экрана Playwright (1024x768)
+            const x = Math.round((e.clientX - rect.left) * (1024 / rect.width));
+            const y = Math.round((e.clientY - rect.top) * (768 / rect.height));
+            
+            await fetch(`/auth/click/${currentBrowserId}?x=${x}&y=${y}`, { method: 'POST' });
         }
 
         async function uploadProxies() {
