@@ -110,10 +110,12 @@ async def get_proxy_info(proxy: dict):
     else:
         proxy_url = f"{proxy['proxy_type']}://{proxy['addr']}:{proxy['port']}"
 
+    print(f"[INFO] Проверяем прокси: {proxy_url}")
     start_time = time.time()
     try:
         connector = ProxyConnector.from_url(proxy_url)
-        async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=5)) as session:
+        # Увеличен тайм-аут до 15 секунд для стабильности медленных SOCKS5
+        async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=15)) as session:
             async with session.get("http://ip-api.com/json/?fields=status,country,countryCode,query") as response:
                 data = await response.json()
                 ping = int((time.time() - start_time) * 1000)
@@ -126,7 +128,7 @@ async def get_proxy_info(proxy: dict):
                         "country": COUNTRY_RU.get(code, data.get("country"))
                     }, ping
     except Exception as e:
-        print(f"[WARN] Ошибка проверки IP: {e}")
+        print(f"[WARN] Ошибка проверки IP через прокси {proxy_url}: {e}")
     
     return {"ip": "N/A", "country_code": "UN", "country": "Неизвестно"}, 0
 
@@ -312,7 +314,6 @@ async def open_web(acc_id: str):
     proxy_conf = None
     if proxy_row:
         p_type = getattr(proxy_row, "proxy_type", "socks5")
-        # Если это SOCKS5 с логином/паролем, Chromium падает. Конвертируем в http или передаем корректно.
         if proxy_row.username and proxy_row.password:
             proxy_conf = {
                 "server": f"http://{proxy_row.addr}:{proxy_row.port}",
