@@ -13,8 +13,6 @@ from opentele2.td import TDesktop
 from opentele2.api import API, UseCurrentSession
 
 # --- Конфиг ---
-API_ID = 2040
-API_HASH = "b18441a1ff607e10a989891a5462e627"
 DATA_DIR = Path("/data")
 SESS_DIR = DATA_DIR / "sessions"
 UPLOAD_DIR = Path("/app/uploads")
@@ -59,7 +57,7 @@ Base.metadata.create_all(engine)
 class ProxyList(BaseModel):
     text: str
 
-# --- Парсер прокси (все форматы) ---
+# --- Парсер прокси ---
 def parse_proxy(line: str):
     line = line.strip()
     if not line or line.startswith("#"):
@@ -121,7 +119,6 @@ def extract_tdata(zip_path: str) -> list:
     for path in out.rglob("*"):
         if not path.is_dir():
             continue
-        # Ищем папки, где есть key_datas или файлы формата tdata
         if (path / "key_datas").exists() or any(
             f.name.isupper() and len(f.name) == 16 for f in path.glob("*")
         ):
@@ -131,25 +128,17 @@ def extract_tdata(zip_path: str) -> list:
 # --- Валидатор ---
 async def validate(tdata_path: str, proxy: dict, acc_id: str):
     tdesk = TDesktop(tdata_path)
-    dev = random.choice(DEVICES)
     session = str(SESS_DIR / f"{acc_id}.session")
     
     print(f"[DEBUG] Конвертация tdata: {tdata_path}")
     
-    # Конвертируем в Telethon сессию с флагом использования текущей сессии
+    # ИСПРАВЛЕНО: Убраны неверные аргументы из Generate()
     client = await tdesk.ToTelethon(
         session, 
         UseCurrentSession,
-        api=API.TelegramDesktop.Generate(
-            api_id=API_ID, 
-            api_hash=API_HASH, 
-            device_model=dev["device_model"], 
-            system_version=dev["system_version"],
-            app_version=dev["app_version"]
-        )
+        api=API.TelegramDesktop.Generate(unique_id=acc_id)
     )
     
-    # Привязываем прокси, если он есть
     if proxy:
         print(f"[DEBUG] Подключаем прокси: {proxy['addr']}:{proxy['port']}")
         client._proxy = proxy
@@ -169,7 +158,7 @@ async def validate(tdata_path: str, proxy: dict, acc_id: str):
             "user_id": me.id,
             "username": me.username,
             "phone": me.phone,
-            "device": dev["device_model"],
+            "device": "Telegram Desktop", 
         }
     finally:
         await client.disconnect()
