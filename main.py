@@ -102,11 +102,23 @@ async def get_proxy_info(proxy: dict):
         pass
     return {"ip": "N/A", "country": "Неизвестно"}, 0
 
+def is_valid_sqlite(file_path: Path) -> bool:
+    try:
+        if file_path.stat().st_size < 100: return False
+        with open(file_path, "rb") as f:
+            header = f.read(16)
+        return header.startswith(b"SQLite format 3")
+    except Exception:
+        return False
+
 async def validate_session_file(session_path: str, proxy_dict: dict, acc_id: str):
+    path_obj = Path(session_path)
+    if not is_valid_sqlite(path_obj):
+        return {"status": "error", "error_msg": "Файл не является валидной SQLite сессией (.session)"}
+
     p_type = proxy_dict.get('proxy_type', 'http')
     proxy_tuple = (p_type, proxy_dict['addr'], proxy_dict['port'], True, proxy_dict.get('username'), proxy_dict.get('password')) if proxy_dict.get('username') else (p_type, proxy_dict['addr'], proxy_dict['port'])
     
-    # Официальные дефолтные API Android для стабильного коннекта сессий
     API_ID = 2040
     API_HASH = "b18441a1ff607e10a989891a5462e627"
 
