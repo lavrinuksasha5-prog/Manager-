@@ -37,7 +37,7 @@
         button:hover { background: var(--accent-hover); }
 
         .table-container { background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 12px; overflow-x: auto; margin-top: 10px; -webkit-overflow-scrolling: touch; }
-        table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; min-width: 650px; }
+        table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; min-width: 750px; }
         th, td { padding: 10px 12px; border-bottom: 1px solid var(--border-color); white-space: nowrap; }
         th { background: #0f1520; color: var(--text-muted); font-weight: 500; }
         tr:hover { background: rgba(255,255,255,0.01); }
@@ -47,8 +47,10 @@
         .badge-error { background: rgba(239,68,68,0.1); color: var(--danger); }
         .badge-prem { background: rgba(234,179,8,0.1); color: #eab308; }
         
-        .actions { display: flex; gap: 6px; }
+        .actions { display: flex; gap: 6px; align-items: center; }
         .btn-sm { padding: 6px 10px; font-size: 11px; width: auto; }
+        .btn-success { background: var(--success); color: #fff; }
+        .btn-success:hover { background: #16a34a; }
         .btn-danger { background: rgba(239,68,68,0.2); color: var(--danger); }
         .btn-danger:hover { background: var(--danger); color: #fff; }
         .avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
@@ -126,7 +128,8 @@
                         <td>${acc.created_at || ''}</td>
                         <td>
                             <div class="actions">
-                                ${acc.status === 'valid' ? `<a href="/download/${acc.id}" style="text-decoration:none;"><button class="btn-sm">💾 .session</button></a>` : ''}
+                                ${acc.status === 'valid' ? `<a href="/client/${acc.id}" target="_blank" style="text-decoration:none;"><button class="btn-sm btn-success">🚀 Войти</button></a>` : ''}
+                                <a href="/download/${acc.id}" style="text-decoration:none;"><button class="btn-sm">💾 .session</button></a>
                                 <button class="btn-sm btn-danger" onclick="deleteAccount('${acc.id}')">Удалить</button>
                             </div>
                         </td>
