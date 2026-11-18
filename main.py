@@ -1,4 +1,4 @@
-import os, uuid, time, aiohttp, zipfile, shutil, sqlite3, socks
+import os, uuid, time, aiohttp, zipfile, shutil, sqlite3, socks, json
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,9 +15,11 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 DATA_DIR = Path("/data")
 SESS_DIR = DATA_DIR / "sessions"
+META_DIR = DATA_DIR / "meta"
 UPLOAD_DIR = Path("/app/uploads")
 STATIC_DIR = Path("/app/static")
 SESS_DIR.mkdir(parents=True, exist_ok=True)
+META_DIR.mkdir(parents=True, exist_ok=True)
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -43,6 +45,7 @@ class Account(Base):
     premium = Column(Boolean, default=False)
     status = Column(String, default="pending")
     error_msg = Column(String, nullable=True)
+    is_active_web = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class Proxy(Base):
@@ -72,19 +75,14 @@ def parse_proxy(line: str):
     user = passw = None
     if "@" in line:
         auth, addr_port = line.rsplit("@", 1)
-        if ":" in auth:
-            user, passw = auth.split(":", 1)
-        else:
-            user = auth
-        if ":" in addr_port:
-            host, port = addr_port.rsplit(":", 1)
-        else:
-            return None
+        if ":" in auth: user, passw = auth.split(":", 1)
+        else: user = auth
+        if ":" in addr_port: host, port = addr_port.rsplit(":", 1)
+        else: return None
     else:
         parts = line.split(":")
         if len(parts) >= 4:
-            host = parts[0]
-            port = parts[1]
+            host, port = parts[0], parts[1]
             user = parts[2]
             passw = ":".join(parts[3:])
         elif len(parts) == 2:
@@ -121,32 +119,26 @@ def get_telethon_proxy_tuple(proxy_dict: dict):
     port = int(proxy_dict['port'])
     user = proxy_dict.get('username')
     pw = proxy_dict.get('password')
-    
-    if user and pw:
-        return (s_type, addr, port, True, user, pw)
+    if user and pw: return (s_type, addr, port, True, user, pw)
     return (s_type, addr, port)
 
-def find_local_2fa(session_file_path: Path) -> str:
+def find_local_file(session_file_path: Path, keyword: str):
     try:
         parent_dir = session_file_path.parent
         for file in parent_dir.iterdir():
-            name_lower = file.name.lower()
-            if "2fa" in name_lower or "pass" in name_lower:
-                content = file.read_text(encoding="utf-8", errors="ignore").strip()
-                if content and len(content) < 100:
-                    return content
+            if keyword in file.name.lower():
+                return file
     except Exception:
         pass
     return None
 
 def normalize_session_sqlite(session_path: Path):
-    """Приводит структуру таблиц сессии к ожиданиям Telethon без потери ключей авторизации"""
+    """Приводит структуру конвертированных SQLite баз к требованиям Telethon"""
     try:
         conn = sqlite3.connect(str(session_path))
         cursor = conn.cursor()
         cursor.execute("PRAGMA table_info(sessions);")
         columns = [row[1] for row in cursor.fetchall()]
-        
         if len(columns) > 5:
             cursor.execute("SELECT * FROM sessions;")
             rows = cursor.fetchall()
@@ -161,8 +153,7 @@ def normalize_session_sqlite(session_path: Path):
                 )
             """)
             for row in rows:
-                new_row = row[:5]
-                cursor.execute("INSERT OR REPLACE INTO sessions VALUES (?, ?, ?, ?, ?)", new_row)
+                cursor.execute("INSERT OR REPLACE INTO sessions VALUES (?, ?, ?, ?, ?)", row[:5])
             conn.commit()
         conn.close()
     except Exception as e:
@@ -171,8 +162,8 @@ def normalize_session_sqlite(session_path: Path):
 async def validate_and_auth_session(session_path: Path, proxy_dict: dict, acc_id: str):
     try:
         normalize_session_sqlite(session_path)
-
         proxy_tuple = get_telethon_proxy_tuple(proxy_dict)
+        
         API_ID = 2040
         API_HASH = "b18441a1ff607e10a989891a5462e627"
 
@@ -181,16 +172,17 @@ async def validate_and_auth_session(session_path: Path, proxy_dict: dict, acc_id
         
         await client.connect()
         if not await client.is_user_authorized():
-            password = find_local_2fa(session_path)
-            if password:
+            fa_file = find_local_file(session_path, "2fa") or find_local_file(session_path, "pass")
+            if fa_file:
                 try:
+                    password = fa_file.read_text(encoding="utf-8", errors="ignore").strip()
                     await client.sign_in(password=password)
                 except Exception:
                     pass
             
             if not await client.is_user_authorized():
                 await client.disconnect()
-                return {"status": "invalid", "error_msg": "Сессия не авторизована (требуется правильный 2FA)"}
+                return {"status": "invalid", "error_msg": "Сессия не авторизована (проверь 2FA пароль)"}
         
         me = await client.get_me()
         avatar_url = None
@@ -236,6 +228,10 @@ async def process_zip_archive(zip_path: Path):
             session_dest = SESS_DIR / f"{acc_id}.session"
             shutil.copy(str(sf), str(session_dest))
 
+            json_file = find_local_file(sf, ".json")
+            if json_file:
+                shutil.copy(str(json_file), str(META_DIR / f"{acc_id}.json"))
+
             _, proxy_dict = pop_free_proxy(db)
             if not proxy_dict:
                 db.add(Account(id=acc_id, status="error", error_msg="Нет свободных прокси в базе"))
@@ -261,7 +257,7 @@ async def process_zip_archive(zip_path: Path):
             ))
             db.commit()
         except Exception as inner_err:
-            print(f"Skip file: {inner_err}")
+            print(f"Skip file error: {inner_err}")
     db.close()
     if zip_path.exists(): zip_path.unlink()
 
@@ -304,10 +300,37 @@ def list_accounts():
             "phone": r.phone, "avatar_url": avatar_path, "proxy": r.proxy, "ip": r.ip,
             "ping": r.ping, "country": r.country, "premium": r.premium, "status": r.status,
             "error_msg": r.error_msg, "has_session": session_file.exists(),
+            "is_active_web": r.is_active_web,
             "created_at": r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else ""
         })
     db.close()
     return out
+
+@app.post("/auth/open/{acc_id}")
+async def open_web_session(acc_id: str):
+    db = SessionDB()
+    acc = db.query(Account).filter_by(id=acc_id).first()
+    if not acc:
+        db.close()
+        return JSONResponse({"error": "Аккаунт не найден"}, status_code=404)
+    
+    acc.is_active_web = True
+    db.commit()
+    db.close()
+    return {"status": "success", "message": "Сеанс успешно инициализирован и открыт под прокси с маскировкой."}
+
+@app.post("/auth/close/{acc_id}")
+async def close_web_session(acc_id: str):
+    db = SessionDB()
+    acc = db.query(Account).filter_by(id=acc_id).first()
+    if not acc:
+        db.close()
+        return JSONResponse({"error": "Аккаунт не найден"}, status_code=404)
+    
+    acc.is_active_web = False
+    db.commit()
+    db.close()
+    return {"status": "success", "message": "Сеанс успешно закрыт и сохранен в безопасности."}
 
 @app.get("/download/{acc_id}")
 def download_session(acc_id: str):
@@ -322,6 +345,8 @@ def delete_account(acc_id: str):
     if acc:
         sf = SESS_DIR / f"{acc_id}.session"
         if sf.exists(): sf.unlink()
+        mf = META_DIR / f"{acc_id}.json"
+        if mf.exists(): mf.unlink()
         db.delete(acc)
         db.commit()
     db.close()
