@@ -34,17 +34,17 @@
     </main>
 
     <!-- Модалка импорта -->
-    <div id="import-modal" class="fixed inset-0 bg-slate-900/50 hidden items-center justify-center z-50">
+    <div id="import-modal" class="fixed inset-0 bg-slate-900/50 hidden items-center justify-center z-50 p-4">
         <div class="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl relative">
             <button onclick="closeModal()" class="absolute top-4 right-4 text-slate-400 hover:text-slate-600">
                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
             </button>
             <h2 class="text-xl font-semibold mb-4">Импорт аккаунтов</h2>
             
-            <!-- Шаг 1: Прокси -->
+            <!-- Шаг 1: Прокси (ТЕКСТОМ) -->
             <div class="mb-6">
-                <label class="block text-sm font-medium text-slate-700 mb-2">1. Загрузите прокси (txt)</label>
-                <input type="file" id="proxy-input" accept=".txt" class="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"/>
+                <label class="block text-sm font-medium text-slate-700 mb-2">1. Вставьте прокси (по одному в строке)</label>
+                <textarea id="proxy-textarea" rows="4" placeholder="user:pass@ip:port&#10;user:pass@ip:port" class="block w-full text-sm p-3 border border-slate-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 outline-none resize-none"></textarea>
             </div>
 
             <!-- Шаг 2: TData -->
@@ -61,13 +61,11 @@
     </div>
 
     <script>
-        const API_URL = ''; // Относительный путь, так как фронт и бэк на одном домене
+        const API_URL = '';
 
-        // Открытие/закрытие модалки
         function openModal() { document.getElementById('import-modal').classList.remove('hidden'); document.getElementById('import-modal').classList.add('flex'); }
         function closeModal() { document.getElementById('import-modal').classList.add('hidden'); document.getElementById('import-modal').classList.remove('flex'); }
 
-        // Загрузка данных
         async function loadAccounts() {
             try {
                 const res = await fetch(`${API_URL}/accounts`);
@@ -76,7 +74,6 @@
             } catch (e) { console.error("Ошибка загрузки:", e); }
         }
 
-        // Отрисовка списка
         function renderAccounts(accounts) {
             const ul = document.getElementById('accounts-ul');
             const empty = document.getElementById('empty-state');
@@ -111,20 +108,18 @@
             `).join('');
         }
 
-        // Удаление
         async function deleteAccount(id) {
             if (!confirm('Удалить аккаунт?')) return;
             await fetch(`${API_URL}/accounts/${id}`, { method: 'DELETE' });
             loadAccounts();
         }
 
-        // Импорт
         async function startImport() {
-            const proxyFile = document.getElementById('proxy-input').files[0];
+            const proxyText = document.getElementById('proxy-textarea').value.trim();
             const zipFile = document.getElementById('zip-input').files[0];
             
-            if (!proxyFile || !zipFile) {
-                alert('Пожалуйста, выберите файл прокси и ZIP-архив с tdata');
+            if (!proxyText || !zipFile) {
+                alert('Пожалуйста, вставьте прокси и выберите ZIP-архив с tdata');
                 return;
             }
 
@@ -138,17 +133,16 @@
             loader.classList.remove('hidden');
 
             try {
-                // 1. Грузим прокси
-                const proxyData = new FormData();
-                proxyData.append('file', proxyFile);
-                await fetch(`${API_URL}/proxies`, { method: 'POST', body: proxyData });
+                await fetch(`${API_URL}/proxies-text`, { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: proxyText }) 
+                });
 
-                // 2. Грузим tdata
                 const zipData = new FormData();
                 zipData.append('file', zipFile);
                 await fetch(`${API_URL}/upload`, { method: 'POST', body: zipData });
 
-                // Ждем немного и обновляем список
                 setTimeout(() => {
                     loadAccounts();
                     closeModal();
@@ -167,9 +161,7 @@
             }
         }
 
-        // Первичная загрузка
         loadAccounts();
-        // Авто-обновление каждые 10 секунд
         setInterval(loadAccounts, 10000);
     </script>
 </body>
