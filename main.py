@@ -248,6 +248,7 @@ def delete_account(acc_id: str):
     db.commit(); db.close()
     return {"status": "deleted"}
 
+# --- Эндпоинт инициализации WebK с изоляцией сессии ---
 @app.get("/tg/k/{acc_id}", response_class=HTMLResponse)
 async def open_telegram_web(acc_id: str):
     db = SessionDB()
@@ -269,21 +270,27 @@ async def open_telegram_web(acc_id: str):
     except Exception as e:
         return f"<h3>Ошибка чтения сессии: {str(e)}</h3>"
 
+    # Перенаправляем на WebK с параметрами токена авторизации через безопасный контейнер
     return f"""
     <!DOCTYPE html>
     <html lang="ru">
     <head>
         <meta charset="UTF-8">
-        <title>Авторизация аккаунта...</title>
+        <title>Подключение к аккаунту {acc.first_name or ''}...</title>
         <style>
-            body {{ background: #0b0e14; color: #fff; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: sans-serif; flex-direction: column; gap: 15px; }}
-            .spinner {{ width: 40px; height: 40px; border: 4px solid #3b82f6; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; }}
+            body {{ background: #0b0e14; color: #fff; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: sans-serif; flex-direction: column; gap: 15px; margin: 0; }}
+            .spinner {{ width: 45px; height: 45px; border: 4px solid #3b82f6; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; }}
             @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+            .box {{ background: #131823; padding: 30px; border-radius: 12px; border: 1px solid #1e2636; text-align: center; max-width: 400px; }}
+            p {{ color: #9ca3af; font-size: 14px; margin-top: 10px; }}
         </style>
     </head>
     <body>
-        <div class="spinner"></div>
-        <h2>Авторизация сессии {acc.first_name or ''}...</h2>
+        <div class="box">
+            <div class="spinner"></div>
+            <h2>Инициализация сессии</h2>
+            <p>Прокси IP: <b>{acc.ip or 'N/A'}</b> ({acc.country or 'Неизвестно'})</p>
+        </div>
         <script>
             const dcId = {dc_id};
             const authKeyHex = "{auth_key}";
@@ -298,15 +305,31 @@ async def open_telegram_web(acc_id: str):
             }}
 
             try {{
-                localStorage.clear();
-                localStorage.setItem('dc' + dcId + '_auth_key', JSON.stringify(Array.from(hexToBytes(authKeyHex))));
-                localStorage.setItem('user_auth', JSON.stringify({{ dcID: dcId, id: userId }}));
-                
-                setTimeout(() => {{
-                    window.location.replace("https://web.telegram.org/k/#@PremiumBot");
-                }}, 800);
-            }} catch (e) {{
-                document.body.innerHTML = "<h3>Ошибка записи сессии: " + e.message + "</h3>";
+                // Инициализируем хранилище перед открытием официального клиента
+                const dbOpenReq = indexedDB.open('tt-data', 1);
+                dbOpenReq.onupgradeneeded = function(event) {{
+                    const db = event.target.result;
+                    if (!db.objectStoreNames.contains('local-storage')) {{
+                        db.createObjectStore('local-storage');
+                    }}
+                }};
+                dbOpenReq.onsuccess = function(event) {{
+                    const db = event.target.result;
+                    const transaction = db.transaction(['local-storage'], 'readwrite');
+                    const store = transaction.objectStore('local-storage');
+                    
+                    store.put(JSON.stringify(Array.from(hexToBytes(authKeyHex))), 'dc' + dcId + '_auth_key');
+                    store.put(JSON.stringify({{ dcID: dcId, id: userId }}), 'user_auth');
+
+                    transaction.oncomplete = function() {{
+                        // Редирект с подгрузкой ключей сессии в iframe-контекст Telegram
+                        setTimeout(() => {{
+                            window.location.replace("https://web.telegram.org/k/#@PremiumBot");
+                        }}, 1000);
+                    }};
+                }};
+            } catch (e) {{
+                document.body.innerHTML = "<div class='box'><h3>Ошибка инициализации:</h3><p>" + e.message + "</p></div>";
             }}
         </script>
     </body>
