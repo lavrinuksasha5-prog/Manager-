@@ -343,6 +343,7 @@ async def open_web(acc_id: str):
             browser = await p.chromium.launch(headless=True)
             
             context_args = {
+                "viewport": {"width": 1280, "height": 900}, # <-- Полноценный десктопный размер окна
                 "locale": geo["locale"],
                 "timezone_id": geo["timezone"],
                 "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
@@ -361,11 +362,11 @@ async def open_web(acc_id: str):
                 localStorage.setItem('user_auth', JSON.stringify({{ dcID: {dc_id}, id: '{acc.user_id}' }}));
             """)
             await page.reload(wait_until="domcontentloaded", timeout=60000)
-            await asyncio.sleep(3)
+            await asyncio.sleep(4)
             
-            await page.screenshot(path=str(screenshot_path))
+            await page.screenshot(path=str(screenshot_path), full_page=True)
             await browser.close()
             return {"status": "ok", "screenshot": f"/static/web_{acc_id}.png"}
     except Exception as e:
         print(f"[ERROR] Ошибка в open_web для {acc_id}: {str(e)}")
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": "Ошибка запроса"}
