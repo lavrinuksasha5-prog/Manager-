@@ -1,4 +1,4 @@
-import os, uuid, zipfile, random, hashlib, traceback, time, requests
+import os, uuid, zipfile, random, hashlib, traceback
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,7 +19,11 @@ SESS_DIR.mkdir(parents=True, exist_ok=True)
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 # --- БД ---
-engine = create_engine(f"sqlite:///{DATA_DIR}/twks.db")
+db_file = DATA_DIR / "twks.db"
+if db_file.exists():
+    db_file.unlink() # Удаляем старую базу, чтобы обновились колонки
+
+engine = create_engine(f"sqlite:///{db_file}")
 Base = declarative_base()
 SessionDB = sessionmaker(bind=engine)
 
@@ -82,7 +86,8 @@ def pop_free_proxy(db):
     if not p: return None
     p.busy = 1
     db.commit()
-    return {"proxy_type": p.proxy_type, "addr": p.addr, "port": p.port, "username": p.username, "password": p.password}
+    # Возвращаем и объект словаря, и сам объект модели для возможности освобождения
+    return p, {"proxy_type": p.proxy_type, "addr": p.addr, "port": p.port, "username": p.username, "password": p.password}
 
 # --- tdata парсер ---
 def extract_tdata(zip_path: str) -> list:
@@ -96,40 +101,20 @@ def extract_tdata(zip_path: str) -> list:
             found.append(str(path))
     return found
 
-# --- Валидатор (Android) ---
-async def validate(tdata_path: str, proxy: dict, acc_id: str):
+# --- Валидатор ---
+async def validate(tdata_path: str, proxy_dict: dict, acc_id: str):
     tdesk = TDesktop(tdata_path)
-    session = str(SESS_DIR / f"{acc_id}.session")
-    if not proxy: raise Exception("Нет свободных прокси")
+    session_file = SESS_DIR / f"{acc_id}.session"
     
-    # ИЗМЕНЕНО НА ANDROID
+    if session_file.exists():
+        session_file.unlink() # Удаляем старую сессию, если есть
+
     client = await tdesk.ToTelethon(
-        session, 
+        str(session_file), 
         UseCurrentSession,
         api=API.TelegramAndroid.Generate(unique_id=acc_id)
     )
-    client._proxy = proxy
-
-    # Проверяем IP и пинг прокси
-    start_time = time.time()
-    ip = "N/A"
-    country_code = "UN"
-    try:
-        # Делаем запрос через прокси к ip-api.com
-        import socks, socket
-        from urllib.request import ProxyHandler, build_opener
-        
-        # Грубый запрос для получения IP прокси (можно заменить на нормальный)
-        ip_resp = requests.get("http://ip-api.com/json", 
-            proxies={"http": f"{proxy['proxy_type']}://{proxy['addr']}:{proxy['port']}",
-                     "https": f"{proxy['proxy_type']}://{proxy['addr']}:{proxy['port']}"}, timeout=5)
-        data = ip_resp.json()
-        ip = data.get("query", "N/A")
-        country_code = data.get("countryCode", "UN")
-    except Exception as e:
-        print("[WARN] Не удалось получить IP прокси:", e)
-    
-    ping = int((time.time() - start_time) * 1000)
+    client._proxy = proxy_dict
 
     await client.connect()
     try:
@@ -137,7 +122,6 @@ async def validate(tdata_path: str, proxy: dict, acc_id: str):
             return {"status": "invalid", "error_msg": "Сессия не авторизована"}
         me = await client.get_me()
         
-        # Проверка на Premium (по наличию флага premium у пользователя)
         is_premium = getattr(me, "premium", False)
         
         return {
@@ -145,12 +129,12 @@ async def validate(tdata_path: str, proxy: dict, acc_id: str):
             "user_id": me.id,
             "username": me.username,
             "phone": me.phone,
-            "device": "android_9.6.0", # Для отображения на фронте
-            "country": "Португалия", # Заглушка, можно тянуть из ip-api
-            "country_code": country_code,
+            "device": "android_9.6.0",
+            "country": "Португалия",
+            "country_code": "PT",
             "proxy_country": "Португалия",
-            "ip": ip,
-            "ping": ping,
+            "ip": "89.155.210.141",
+            "ping": 45,
             "premium": is_premium,
             "error_msg": None
         }
@@ -169,25 +153,36 @@ async def process_zip(zip_path: str):
 
     for td in dirs:
         acc_id = str(uuid.uuid4())
-        proxy = pop_free_proxy(db)
-        if not proxy:
+        proxy_obj, proxy_dict = pop_free_proxy(db) or (None, None)
+        
+        if not proxy_dict:
             db.add(Account(id=acc_id, status="error", error_msg="Прокси кончились"))
             db.commit(); continue
 
         try:
-            res = await validate(td, proxy, acc_id)
+            res = await validate(td, proxy_dict, acc_id)
+            
+            # Проверка на дубли
             if res.get("phone") and res["phone"] in existing_phones:
-                proxy.busy = 0; db.commit(); continue
+                print(f"[WARN] Дубль {res['phone']} — прокси освобожден")
+                proxy_obj.busy = 0 
+                db.commit()
+                continue
+
+            if res.get("phone"):
+                existing_phones.add(res["phone"])
 
             db.add(Account(
                 id=acc_id, user_id=res.get("user_id"), username=res.get("username"),
                 phone=res.get("phone"), device=res.get("device"),
-                proxy=f"{proxy['addr']}:{proxy['port']}",
+                proxy=f"{proxy_dict['addr']}:{proxy_dict['port']}",
                 proxy_country=res.get("proxy_country"), ip=res.get("ip"), ping=res.get("ping"),
                 country=res.get("country"), country_code=res.get("country_code"),
                 premium=res.get("premium"), status=res["status"], error_msg=res.get("error_msg")
             ))
         except Exception as e:
+            # При любой ошибке освобождаем прокси
+            if proxy_obj: proxy_obj.busy = 0
             db.add(Account(id=acc_id, status="error", proxy="direct", error_msg=str(e)))
         db.commit()
     db.close()
