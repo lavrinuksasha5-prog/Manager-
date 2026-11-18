@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, String, Integer, DateTime, Boolean
+from sqlalchemy import create_engine, Column, String, Integer, DateTime, Boolean, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 from telethon import TelegramClient
@@ -58,6 +58,13 @@ class Proxy(Base):
     proxy_type = Column(String, default="http")
 
 Base.metadata.create_all(engine)
+
+# Автомиграция колонок для существующих баз на томе
+with engine.begin() as conn:
+    try:
+        conn.execute(text("ALTER TABLE sessions_accounts ADD COLUMN is_active_web BOOLEAN DEFAULT 0;"))
+    except Exception:
+        pass # Колонка уже существует
 
 class ProxyList(BaseModel):
     text: str
@@ -133,7 +140,6 @@ def find_local_file(session_file_path: Path, keyword: str):
     return None
 
 def normalize_session_sqlite(session_path: Path):
-    """Приводит структуру конвертированных SQLite баз к требованиям Telethon"""
     try:
         conn = sqlite3.connect(str(session_path))
         cursor = conn.cursor()
