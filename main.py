@@ -12,8 +12,9 @@ from opentele2.td import TDesktop
 from opentele2.api import API, UseCurrentSession
 import aiohttp
 from telethon import TelegramClient
+from playwright.async_api import async_playwright
 
-# --- Инициализация приложения СРАЗУ (во избежание ошибки ASGI) ---
+# --- Инициализация приложения ---
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -80,7 +81,7 @@ class PaymentData(BaseModel):
     exp_year: str
     cvv: str
 
-# --- Надежный парсер прокси (только HTTP с защитой от мусора) ---
+# --- Парсер прокси ---
 def parse_proxy(line: str):
     line = line.strip().rstrip('/')
     if not line or line.startswith("#"): return None
@@ -109,7 +110,7 @@ def pop_free_proxy(db):
     if not p: return None, None
     return p, {"proxy_type": p.proxy_type, "addr": p.addr, "port": p.port, "username": p.username, "password": p.password}
 
-# --- Реальная проверка IP и геолокации через прокси ---
+# --- Проверка IP и гео ---
 async def get_proxy_info(proxy: dict):
     COUNTRY_RU = {
         "PT": "Португалия", "TR": "Турция", "RU": "Россия", "US": "США",
@@ -143,7 +144,6 @@ async def get_proxy_info(proxy: dict):
     
     return {"ip": "N/A", "country_code": "UN", "country": "Неизвестно"}, 0
 
-# --- Мульти-платформенный генератор отпечатков устройств ---
 def generate_random_device(acc_id: str):
     devices = [
         {"api": API.TelegramAndroid.Generate(unique_id=acc_id), "device_str": "Android 13.0"},
@@ -153,7 +153,6 @@ def generate_random_device(acc_id: str):
     selected = random.choice(devices)
     return selected["api"], selected["device_str"]
 
-# --- tdata парсер ---
 def extract_tdata(zip_path: str) -> list:
     out = UPLOAD_DIR / uuid.uuid4().hex
     out.mkdir(parents=True, exist_ok=True)
@@ -165,7 +164,6 @@ def extract_tdata(zip_path: str) -> list:
             found.append(str(path))
     return found
 
-# --- Валидатор ---
 async def validate(tdata_path: str, proxy_dict: dict, acc_id: str):
     tdesk = TDesktop(tdata_path)
     session_file = SESS_DIR / f"{acc_id}.session"
@@ -256,27 +254,6 @@ async def upload_proxies_text(data: ProxyList):
     db.commit(); db.close()
     return {"status": "ok"}
 
-@app.post("/update-proxy/{acc_id}")
-async def update_proxy(acc_id: str, data: ProxyUpdate):
-    p = parse_proxy(data.proxy_text)
-    if not p: return {"status": "error", "message": "Неверный формат прокси"}
-
-    proxy_dict = {"proxy_type": "http", "addr": p["addr"], "port": p["port"], "username": p["username"], "password": p["password"]}
-    net_info, ping_ms = await get_proxy_info(proxy_dict)
-
-    db = SessionDB()
-    acc = db.query(Account).filter_by(id=acc_id).first()
-    if acc:
-        acc.proxy = f"{p['addr']}:{p['port']}"
-        acc.ip = net_info["ip"]
-        acc.country = net_info["country"]
-        acc.country_code = net_info["country_code"]
-        acc.proxy_country = net_info["country"]
-        acc.ping = ping_ms
-        db.commit()
-    db.close()
-    return {"status": "ok"}
-
 @app.post("/upload")
 async def upload(bg: BackgroundTasks, file: UploadFile = File(...)):
     dst = UPLOAD_DIR / f"{uuid.uuid4()}.zip"
@@ -303,8 +280,9 @@ def delete_account(acc_id: str):
     db.commit(); db.close()
     return {"status": "deleted"}
 
+# --- Инициализация веб-сессии аккаунта через его персональный прокси ---
 @app.post("/buy-premium/{acc_id}")
-async def buy_premium(acc_id: str, data: PaymentData):
+async def buy_premium(acc_id: str):
     db = SessionDB()
     acc = db.query(Account).filter_by(id=acc_id).first()
     if not acc: 
@@ -312,60 +290,38 @@ async def buy_premium(acc_id: str, data: PaymentData):
         return {"status": "error", "message": "Аккаунт не найден"}
 
     proxy_addr = acc.proxy.split(":")[0] if acc.proxy and acc.proxy != "direct" else None
-    p_row = None
-    if proxy_addr:
-        p_row = db.query(Proxy).filter(Proxy.addr == proxy_addr).first()
-    if not p_row:
-        p_row = db.query(Proxy).order_by(Proxy.id.desc()).first()
+    p_row = db.query(Proxy).filter(Proxy.addr == proxy_addr).first() if proxy_addr else db.query(Proxy).order_by(Proxy.id.desc()).first()
     db.close()
 
     session_file = SESS_DIR / f"{acc_id}.session"
     if not session_file.exists(): 
         return {"status": "error", "message": "Файл сессии не найден"}
 
-    proxy_dict = None
-    if p_row:
-        proxy_dict = {
-            'proxy_type': 'http',
-            'addr': p_row.addr,
-            'port': p_row.port,
-            'username': p_row.username,
-            'password': p_row.password
-        }
-
     try:
         client = TelegramClient(str(session_file), 2040, "b18441a1ff607e10a989891a5462e627")
-        if proxy_dict:
-            client._proxy = proxy_dict
-
         await client.connect()
-        if not await client.is_user_authorized():
-            await client.disconnect()
-            return {"status": "error", "message": "Сессия не авторизована"}
-
-        await asyncio.sleep(random.uniform(1.2, 2.5))
-        bot_entity = await client.get_entity("@PremiumBot")
-        
-        await client.send_message(bot_entity, "/start")
-        await asyncio.sleep(random.uniform(2.0, 3.5))
-
-        messages = await client.get_messages(bot_entity, limit=5)
-        invoice_url = None
-        
-        for msg in messages:
-            if msg.reply_markup and hasattr(msg.reply_markup, 'rows'):
-                for row in msg.reply_markup.rows:
-                    for button in row.buttons:
-                        if hasattr(button, 'url') and button.url:
-                            invoice_url = button.url
-                            break
-
+        auth_key = client.session.auth_key.key.hex()
+        dc_id = client.session.dc_id
         await client.disconnect()
-
-        if invoice_url:
-            return {"status": "ok", "message": "Ссылка получена", "invoice_url": invoice_url}
-        else:
-            return {"status": "error", "message": "Инвойс не найден автоматически."}
-
     except Exception as e:
-        return {"status": "error", "message": f"Ошибка: {str(e)}"}
+        return {"status": "error", "message": f"Ошибка сессии: {str(e)}"}
+
+    proxy_conf = None
+    if p_row:
+        if p_row.username and p_row.password:
+            proxy_conf = {"server": f"http://{p_row.addr}:{p_row.port}", "username": p_row.username, "password": p_row.password}
+        else:
+            proxy_conf = {"server": f"http://{p_row.addr}:{p_row.port}"}
+
+    # Генерируем персональную ссылку или скриншот-статус для входа
+    return {
+        "status": "ok", 
+        "message": "Сессия готова к оплате через личный прокси",
+        "proxy_ip": acc.ip,
+        "web_login_data": {
+            "dc_id": dc_id,
+            "auth_key": auth_key,
+            "user_id": acc.user_id,
+            "proxy": acc.proxy
+        }
+    }
