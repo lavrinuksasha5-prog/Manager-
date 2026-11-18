@@ -69,7 +69,6 @@ with engine.begin() as conn:
 class ProxyList(BaseModel):
     text: str
 
-# --- ХРАНИЛИЩЕ БРАУЗЕРОВ ---
 active_browsers = {}
 
 def parse_proxy(line: str):
@@ -326,7 +325,7 @@ def list_accounts():
     db.close()
     return out
 
-# --- УПРАВЛЕНИЕ БРАУЗЕРОМ ---
+# --- УПРАВЛЕНИЕ БРАУЗЕРОМ (Web Z) ---
 @app.post("/auth/start_browser/{acc_id}")
 async def start_browser_session(acc_id: str):
     db = SessionDB()
@@ -339,15 +338,23 @@ async def start_browser_session(acc_id: str):
     session_path = SESS_DIR / f"{acc_id}.session"
 
     try:
+        # 1. Проверяем сессию через Telethon и достаем ключи
         client = TelegramClient(str(session_path), api_id=2040, api_hash="b18441a1ff607e10a989891a5462e627", proxy=get_telethon_proxy_tuple(proxy_dict))
         await client.connect()
-        tok = await client(functions.auth.ExportLoginTokenRequest(api_id=2040, api_hash="b18441a1ff607e10a989891a5462e627", except_ids=[]))
+        if not await client.is_user_authorized():
+            await client.disconnect()
+            db.close()
+            return JSONResponse({"error": "Сессия не авторизована"}, status_code=400)
+
+        session = client.session
+        dc_id = session.dc_id
+        auth_key = session.auth_key.key.hex() if session.auth_key else None
         await client.disconnect()
 
-        token_b64 = base64.urlsafe_b64encode(tok.token).decode('utf-8').rstrip('=')
-        web_url = f"https://web.telegram.org/k/#auth={token_b64}"
+        if not auth_key:
+            return JSONResponse({"error": "Нет ключа авторизации"}, status_code=400)
 
-        # Запуск Playwright с прокси
+        # 2. Запускаем Playwright с прокси
         p = await async_playwright().start()
         proxy_settings = {}
         if proxy_dict:
@@ -358,12 +365,25 @@ async def start_browser_session(acc_id: str):
             }
 
         browser = await p.chromium.launch(headless=True, proxy=proxy_settings)
-        context = await browser.new_context(viewport={"width": 1024, "height": 768})
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
         page = await context.new_page()
-        await page.goto(web_url)
+        
+        # 3. Открываем Web Z (старая версия, поддерживает инъекцию)
+        await page.goto("https://web.telegram.org/z/")
+        
+        # 4. Вставляем ключи
+        await page.evaluate(f"""
+            localStorage.setItem('dc', '{dc_id}');
+            localStorage.setItem('auth_key', '{auth_key}');
+        """)
+        
+        # 5. Перезагружаем для авторизации
+        await page.reload()
+        await page.wait_for_timeout(3000)
 
         active_browsers[acc_id] = {"p": p, "browser": browser, "context": context, "page": page}
-
         acc.is_active_web = True
         db.commit()
         db.close()
