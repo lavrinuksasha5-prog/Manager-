@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>TWKS - Telegram Session Manager</title>
+    <title>TWKS - Session Manager</title>
     <style>
         :root {
             --bg-color: #0b0e14;
@@ -38,7 +38,6 @@
         .badge-prem { background: rgba(234,179,8,0.1); color: #eab308; }
         .actions { display: flex; gap: 6px; align-items: center; }
         .btn-sm { padding: 6px 10px; font-size: 11px; width: auto; }
-        .btn-success { background: var(--success); color: #fff; }
         .btn-danger { background: rgba(239,68,68,0.2); color: var(--danger); }
         .avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
     </style>
@@ -55,10 +54,10 @@
             </div>
             
             <div class="card">
-                <h2>2. Загрузка архива tdata (ZIP)</h2>
+                <h2>2. Загрузка файла сессии (.session)</h2>
                 <label class="file-upload">
-                    <span id="uploadText" style="font-size: 13px; color: var(--text-muted);">📁 Выбрать ZIP с tdata</span>
-                    <input type="file" id="zipFile" accept=".zip" onchange="uploadZip()">
+                    <span id="uploadText" style="font-size: 13px; color: var(--text-muted);">📁 Выбрать файл .session</span>
+                    <input type="file" id="sessionFile" accept=".session" onchange="uploadSession()">
                 </label>
             </div>
         </div>
@@ -70,7 +69,6 @@
                         <th>Аватар</th>
                         <th>Телефон / ID</th>
                         <th>Имя / Username</th>
-                        <th>Устройство / Сессия</th>
                         <th>Прокси / IP</th>
                         <th>Пинг</th>
                         <th>Премиум</th>
@@ -79,7 +77,7 @@
                     </tr>
                 </thead>
                 <tbody id="accountsTable">
-                    <tr><td colspan="9" style="text-align: center; color: var(--text-muted);">Загрузка аккаунтов...</td></tr>
+                    <tr><td colspan="8" style="text-align: center; color: var(--text-muted);">Загрузка сессий...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -93,7 +91,7 @@
                 const tbody = document.getElementById('accountsTable');
                 
                 if (data.length === 0) {
-                    tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: var(--text-muted);">Аккаунты не добавлены</td></tr>`;
+                    tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: var(--text-muted);">Сессии не добавлены</td></tr>`;
                     return;
                 }
 
@@ -102,16 +100,14 @@
                         <td>${acc.avatar_url ? `<img src="${acc.avatar_url}" class="avatar">` : '👤'}</td>
                         <td><strong>${acc.phone || 'N/A'}</strong><br><span style="color:var(--text-muted);font-size:10px">${acc.user_id || ''}</span></td>
                         <td>${acc.first_name || ''}<br><span style="color:var(--text-muted);font-size:10px">@${acc.username || 'none'}</span></td>
-                        <td><code>${acc.device || 'tdata'}</code></td>
                         <td>${acc.proxy || 'N/A'}<br><span style="color:var(--text-muted);font-size:10px">${acc.ip || ''} (${acc.country || ''})</span></td>
                         <td>${acc.ping} ms</td>
                         <td>${acc.premium ? '<span class="badge badge-prem">⭐ Премиум</span>' : 'Нет'}</td>
                         <td>
-                            ${acc.status === 'valid' ? '<span class="badge badge-valid">Загружен</span>' : `<span class="badge badge-error" onclick="alert('${acc.error_msg || ''}')">Ошибка 🔍</span>`}
+                            ${acc.status === 'valid' ? '<span class="badge badge-valid">Активна</span>' : `<span class="badge badge-error" onclick="alert('${acc.error_msg || ''}')">Ошибка 🔍</span>`}
                         </td>
                         <td>
                             <div class="actions">
-                                <button class="btn-sm btn-success" onclick="loginAccount('${acc.id}')">🚀 Войти</button>
                                 ${acc.has_session ? `<a href="/download/${acc.id}"><button class="btn-sm">💾 .session</button></a>` : ''}
                                 <button class="btn-sm btn-danger" onclick="deleteAccount('${acc.id}')">Удалить</button>
                             </div>
@@ -119,23 +115,6 @@
                     </tr>
                 `).join('');
             } catch (err) { console.error(err); }
-        }
-
-        async function loginAccount(id) {
-            if(!confirm('Создать новую сессию для этого аккаунта через перехват кода из 777000?')) return;
-            alert('🚀 Запрос отправлен! Софт запрашивает код на новое устройство...');
-            try {
-                const res = await fetch(`/login/${id}`, { method: 'POST' });
-                const data = await res.json();
-                if(res.ok) {
-                    alert('✅ Успешно! Новая сессия создана. Теперь можно скачать .session файл.');
-                    loadAccounts();
-                } else {
-                    alert('❌ Ошибка входа: ' + (data.error || 'Неизвестно'));
-                }
-            } catch(err) {
-                alert('Ошибка сети: ' + err.message);
-            }
         }
 
         async function uploadProxies() {
@@ -151,21 +130,22 @@
             document.getElementById('proxyInput').value = '';
         }
 
-        async function uploadZip() {
-            const fileInput = document.getElementById('zipFile');
+        async function uploadSession() {
+            const fileInput = document.getElementById('sessionFile');
             if (!fileInput.files[0]) return;
             const formData = new FormData();
             formData.append('file', fileInput.files[0]);
-            document.getElementById('uploadText').innerText = '⏳ Загрузка архива...';
-            await fetch('/upload', { method: 'POST', body: formData });
-            alert('Архив принят! Аккаунты появятся в таблице через пару секунд.');
+            document.getElementById('uploadText').innerText = '⏳ Проверка сессии...';
+            
+            await fetch('/upload-session', { method: 'POST', body: formData });
+            alert('Файл принят! Сессия проверяется через прокси.');
             setTimeout(loadAccounts, 3000);
-            document.getElementById('uploadText').innerText = '📁 Выбрать ZIP с tdata';
+            document.getElementById('uploadText').innerText = '📁 Выбрать файл .session';
             fileInput.value = '';
         }
 
         async function deleteAccount(id) {
-            if (!confirm('Удалить аккаунт?')) return;
+            if (!confirm('Удалить сессию?')) return;
             await fetch(`/accounts/${id}`, { method: 'DELETE' });
             loadAccounts();
         }
