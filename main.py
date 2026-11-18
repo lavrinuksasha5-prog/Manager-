@@ -2,6 +2,8 @@ import os, uuid, zipfile, random, hashlib
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from sqlalchemy import create_engine, Column, String, Integer, DateTime
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
@@ -124,12 +126,10 @@ def extract_tdata(zip_path: str) -> list:
 
 # --- Валидатор ---
 async def validate(tdata_path: str, proxy: dict, acc_id: str):
-    # RU: инициализация клиента через opentele2
     tdesk = TDesktop(tdata_path)
     dev = random.choice(DEVICES)
     session = str(SESS_DIR / f"{acc_id}.session")
     
-    # RU: конвертация tdata в Telethon сессию
     client = await tdesk.ToTelethon(
         session, 
         api=API.TelegramDesktop.Generate(
@@ -161,6 +161,9 @@ async def validate(tdata_path: str, proxy: dict, acc_id: str):
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+# Подключаем папку со статикой (если понадобится для картинок/JS отдельно)
+app.mount("/static", StaticFiles(directory="."), name="static")
+
 async def process_zip(zip_path: str):
     dirs = extract_tdata(zip_path)
     db = SessionDB()
@@ -186,7 +189,8 @@ async def process_zip(zip_path: str):
 
 @app.get("/")
 def root():
-    return {"status": "ok", "service": "TWKS Manager"}
+    # Отдаем фронтенд на главной
+    return FileResponse("index.html")
 
 @app.post("/proxies")
 async def upload_proxies(file: UploadFile = File(...)):
