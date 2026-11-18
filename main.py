@@ -12,7 +12,6 @@ from opentele2.td import TDesktop
 from opentele2.api import API, UseCurrentSession
 from playwright.async_api import async_playwright
 import aiohttp
-from aiohttp_socks import ProxyConnector
 from telethon import TelegramClient
 
 # --- Конфиг ---
@@ -60,7 +59,7 @@ class Proxy(Base):
     port = Column(Integer)
     username = Column(String, nullable=True)
     password = Column(String, nullable=True)
-    proxy_type = Column(String)
+    proxy_type = Column(String, default="http")
 
 Base.metadata.create_all(engine)
 
@@ -70,14 +69,15 @@ class ProxyList(BaseModel):
 class ProxyUpdate(BaseModel):
     proxy_text: str
 
-# --- Парсер прокси ---
+# --- Парсер прокси (только HTTP) ---
 def parse_proxy(line: str):
-    line = line.strip()
+    line = line.strip().rstrip('/')
     if not line or line.startswith("#"): return None
-    proxy_type = "socks5"
-    if line.startswith("socks5://"): line = line.replace("socks5://", "")
-    elif line.startswith("http://"): line = line.replace("http://", ""); proxy_type = "http"
-    elif line.startswith("https://"): line = line.replace("https://", ""); proxy_type = "http"
+    
+    proxy_type = "http"
+    if line.startswith("http://"): line = line.replace("http://", "")
+    elif line.startswith("https://"): line = line.replace("https://", "")
+    elif line.startswith("socks"): return None # Игнорируем соксы на всякий случай
 
     user = passw = None
     if "@" in line:
@@ -88,6 +88,9 @@ def parse_proxy(line: str):
     elif line.count(":") == 1: host, port = line.split(":")
     else: return None
 
+    port = ''.join(filter(str.isdigit, port))
+    if not port: return None
+
     return {"proxy_type": proxy_type, "addr": host, "port": int(port), "username": user, "password": passw}
 
 def pop_free_proxy(db):
@@ -95,7 +98,7 @@ def pop_free_proxy(db):
     if not p: return None, None
     return p, {"proxy_type": p.proxy_type, "addr": p.addr, "port": p.port, "username": p.username, "password": p.password}
 
-# --- Проверка IP и геолокации ---
+# --- Проверка IP и геолокации через HTTP прокси ---
 async def get_proxy_info(proxy: dict):
     COUNTRY_RU = {
         "PT": "Португалия", "TR": "Турция", "RU": "Россия", "US": "США",
@@ -106,17 +109,15 @@ async def get_proxy_info(proxy: dict):
     }
     
     if proxy["username"] and proxy["password"]:
-        proxy_url = f"{proxy['proxy_type']}://{proxy['username']}:{proxy['password']}@{proxy['addr']}:{proxy['port']}"
+        proxy_url = f"http://{proxy['username']}:{proxy['password']}@{proxy['addr']}:{proxy['port']}"
     else:
-        proxy_url = f"{proxy['proxy_type']}://{proxy['addr']}:{proxy['port']}"
+        proxy_url = f"http://{proxy['addr']}:{proxy['port']}"
 
-    print(f"[INFO] Проверяем прокси: {proxy_url}")
+    print(f"[INFO] Проверяем HTTP прокси: {proxy_url}")
     start_time = time.time()
     try:
-        connector = ProxyConnector.from_url(proxy_url)
-        # Увеличен тайм-аут до 15 секунд для стабильности медленных SOCKS5
-        async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=15)) as session:
-            async with session.get("http://ip-api.com/json/?fields=status,country,countryCode,query") as response:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
+            async with session.get("http://ip-api.com/json/?fields=status,country,countryCode,query", proxy=proxy_url) as response:
                 data = await response.json()
                 ping = int((time.time() - start_time) * 1000)
                 
@@ -128,7 +129,7 @@ async def get_proxy_info(proxy: dict):
                         "country": COUNTRY_RU.get(code, data.get("country"))
                     }, ping
     except Exception as e:
-        print(f"[WARN] Ошибка проверки IP через прокси {proxy_url}: {e}")
+        print(f"[WARN] Ошибка проверки IP через HTTP прокси {proxy_url}: {e}")
     
     return {"ip": "N/A", "country_code": "UN", "country": "Неизвестно"}, 0
 
@@ -155,7 +156,29 @@ async def validate(tdata_path: str, proxy_dict: dict, acc_id: str):
         UseCurrentSession,
         api=API.TelegramAndroid.Generate(unique_id=acc_id)
     )
-    client._proxy = proxy_dict
+    
+    # Настраиваем HTTP прокси для Telethon
+    if proxy_dict["username"] and proxy_dict["password"]:
+        client._proxy = (
+            import_socks_type := 2, # HTTP type for telethon (or tuple format)
+            proxy_dict["addr"],
+            proxy_dict["port"],
+            True,
+            proxy_dict["username"],
+            proxy_dict["password"]
+        ) if False else {
+            'proxy_type': 'http',
+            'addr': proxy_dict['addr'],
+            'port': proxy_dict['port'],
+            'username': proxy_dict['username'],
+            'password': proxy_dict['password']
+        }
+    else:
+        client._proxy = {
+            'proxy_type': 'http',
+            'addr': proxy_dict['addr'],
+            'port': proxy_dict['port']
+        }
 
     net_info, ping_ms = await get_proxy_info(proxy_dict)
     
@@ -227,16 +250,16 @@ async def upload_proxies_text(data: ProxyList):
     db = SessionDB()
     for line in data.text.splitlines():
         p = parse_proxy(line)
-        if p: db.add(Proxy(addr=p["addr"], port=p["port"], username=p["username"], password=p["password"], proxy_type=p["proxy_type"]))
+        if p: db.add(Proxy(addr=p["addr"], port=p["port"], username=p["username"], password=p["password"], proxy_type="http"))
     db.commit(); db.close()
     return {"status": "ok"}
 
 @app.post("/update-proxy/{acc_id}")
 async def update_proxy(acc_id: str, data: ProxyUpdate):
     p = parse_proxy(data.proxy_text)
-    if not p: return {"status": "error", "message": "Неверный формат прокси"}
+    if not p: return {"status": "error", "message": "Неверный формат прокси (только HTTP)"}
 
-    proxy_dict = {"proxy_type": p["proxy_type"], "addr": p["addr"], "port": p["port"], "username": p["username"], "password": p["password"]}
+    proxy_dict = {"proxy_type": "http", "addr": p["addr"], "port": p["port"], "username": p["username"], "password": p["password"]}
     net_info, ping_ms = await get_proxy_info(proxy_dict)
 
     db = SessionDB()
@@ -297,7 +320,6 @@ async def open_web(acc_id: str):
 
     screenshot_path = STATIC_DIR / f"web_{acc_id}.png"
 
-    # Маппинг локалей и таймзон под гео
     GEO_CONFIGS = {
         "PT": {"locale": "pt-PT", "timezone": "Europe/Lisbon"},
         "DE": {"locale": "de-DE", "timezone": "Europe/Berlin"},
@@ -313,7 +335,6 @@ async def open_web(acc_id: str):
 
     proxy_conf = None
     if proxy_row:
-        p_type = getattr(proxy_row, "proxy_type", "socks5")
         if proxy_row.username and proxy_row.password:
             proxy_conf = {
                 "server": f"http://{proxy_row.addr}:{proxy_row.port}",
@@ -321,7 +342,7 @@ async def open_web(acc_id: str):
                 "password": proxy_row.password
             }
         else:
-            proxy_conf = {"server": f"{p_type}://{proxy_row.addr}:{proxy_row.port}"}
+            proxy_conf = {"server": f"http://{proxy_row.addr}:{proxy_row.port}"}
 
     try:
         async with async_playwright() as p:
@@ -341,8 +362,6 @@ async def open_web(acc_id: str):
                 await context.set_http_credentials(username=proxy_row.username, password=proxy_row.password)
 
             page = await context.new_page()
-            
-            # Скрываем флаг webdriver от антифрода
             await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
 
             await page.goto("https://web.telegram.org/k/", wait_until="domcontentloaded", timeout=60000)
