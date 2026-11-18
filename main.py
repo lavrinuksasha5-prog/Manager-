@@ -39,32 +39,73 @@ class Account(Base):
     status = Column(String, default="pending")
     created_at = Column(DateTime, default=datetime.utcnow)
 
+class Proxy(Base):
+    __tablename__ = "proxies"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    raw = Column(String)
+    addr = Column(String)
+    port = Column(Integer)
+    username = Column(String, nullable=True)
+    password = Column(String, nullable=True)
+    proxy_type = Column(String)
+    busy = Column(Integer, default=0)
+
 Base.metadata.create_all(engine)
 
-# --- Прокси (sticky) ---
-def load_pool():
-    pool = []
-    path = Path("proxies.txt")
-    if not path.exists():
-        return pool
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        p = line.split(":")
-        pool.append({
-            "proxy_type": "socks5",
-            "addr": p[0], "port": int(p[1]),
-            "username": p[2] if len(p) > 2 else None,
-            "password": p[3] if len(p) > 3 else None,
-        })
-    return pool
-
-def sticky_proxy(acc_id: str, pool: list):
-    if not pool:
+# --- Парсер прокси (все форматы) ---
+def parse_proxy(line: str):
+    """RU: парсит любой формат прокси"""
+    line = line.strip()
+    if not line or line.startswith("#"):
         return None
-    idx = int(hashlib.md5(acc_id.encode()).hexdigest(), 16) % len(pool)
-    return pool[idx]
+
+    proxy_type = "socks5"
+    if line.startswith("socks5://"):
+        line = line.replace("socks5://", "")
+        proxy_type = "socks5"
+    elif line.startswith("http://"):
+        line = line.replace("http://", "")
+        proxy_type = "http"
+    elif line.startswith("https://"):
+        line = line.replace("https://", "")
+        proxy_type = "http"
+
+    user = passw = None
+
+    if "@" in line:
+        auth, addr = line.split("@", 1)
+        if ":" in auth:
+            user, passw = auth.split(":", 1)
+        host, port = addr.split(":")
+    elif line.count(":") == 3:
+        host, port, user, passw = line.split(":")
+    elif line.count(":") == 1:
+        host, port = line.split(":")
+    else:
+        return None
+
+    return {
+        "proxy_type": proxy_type,
+        "addr": host,
+        "port": int(port),
+        "username": user,
+        "password": passw,
+    }
+
+def pop_free_proxy(db):
+    """RU: достать свободный прокси из БД и пометить занятым"""
+    p = db.query(Proxy).filter_by(busy=0).first()
+    if not p:
+        return None
+    p.busy = 1
+    db.commit()
+    return {
+        "proxy_type": p.proxy_type,
+        "addr": p.addr,
+        "port": p.port,
+        "username": p.username,
+        "password": p.password,
+    }
 
 # --- tdata парсер ---
 def extract_tdata(zip_path: str) -> list:
@@ -117,11 +158,10 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 async def process_zip(zip_path: str):
     dirs = extract_tdata(zip_path)
-    pool = load_pool()
     db = SessionDB()
     for td in dirs:
         acc_id = str(uuid.uuid4())
-        proxy = sticky_proxy(acc_id, pool)
+        proxy = pop_free_proxy(db)
         try:
             res = await validate(td, proxy, acc_id)
             db.add(Account(
@@ -142,6 +182,28 @@ async def process_zip(zip_path: str):
 @app.get("/")
 def root():
     return {"status": "ok", "service": "TWKS Manager"}
+
+@app.post("/proxies")
+async def upload_proxies(file: UploadFile = File(...)):
+    """RU: загрузка списка проксей (любой формат, по одной в строке)"""
+    content = (await file.read()).decode("utf-8")
+    db = SessionDB()
+    added = 0
+    for line in content.splitlines():
+        p = parse_proxy(line)
+        if p:
+            db.add(Proxy(
+                raw=line.strip(),
+                addr=p["addr"],
+                port=p["port"],
+                username=p["username"],
+                password=p["password"],
+                proxy_type=p["proxy_type"],
+            ))
+            added += 1
+    db.commit()
+    db.close()
+    return {"status": "ok", "added": added}
 
 @app.post("/upload")
 async def upload(bg: BackgroundTasks, file: UploadFile = File(...)):
