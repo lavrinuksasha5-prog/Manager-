@@ -248,7 +248,7 @@ def delete_account(acc_id: str):
     db.commit(); db.close()
     return {"status": "deleted"}
 
-# --- Отдельный клиентский сайт-шлюз (/client/{acc_id}) ---
+# --- Клиентский шлюз без черного экрана ---
 @app.get("/client/{acc_id}", response_class=HTMLResponse)
 async def open_telegram_client(acc_id: str):
     db = SessionDB()
@@ -278,20 +278,18 @@ async def open_telegram_client(acc_id: str):
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <title>TWKS Telegram Client</title>
         <style>
-            body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #0b0e14; color: #fff; font-family: -apple-system, BlinkMacSystemFont, sans-serif; overflow: hidden; }
-            #loader { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #0b0e14; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 9999; transition: opacity 0.3s ease; }
-            .spinner { width: 48px; height: 48px; border: 4px solid #3b82f6; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
+            body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #0b0e14; color: #fff; font-family: -apple-system, BlinkMacSystemFont, sans-serif; display: flex; justify-content: center; align-items: center; flex-direction: center; text-align: center; }
+            .spinner { width: 48px; height: 48px; border: 4px solid #3b82f6; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto; }
             @keyframes spin { to { transform: rotate(360deg); } }
             h2 { font-size: 18px; margin-top: 15px; font-weight: 500; }
             p { color: #9ca3af; font-size: 13px; margin-top: 5px; }
-            iframe { width: 100%; height: 100%; border: none; display: none; }
         </style>
     </head>
     <body>
-        <div id="loader">
+        <div>
             <div class="spinner"></div>
-            <h2>Запуск клиентской сессии</h2>
-            <p>Прокси IP: <b id="ip-lbl">IP_PLACEHOLDER</b></p>
+            <h2>Авторизация сессии...</h2>
+            <p>Прокси IP: IP_PLACEHOLDER</p>
         </div>
 
         <script>
@@ -327,21 +325,16 @@ async def open_telegram_client(acc_id: str):
 
                     tx.oncomplete = function() {
                         setTimeout(() => {
-                            document.getElementById('loader').style.opacity = '0';
-                            setTimeout(() => document.getElementById('loader').remove(), 300);
-                            
-                            const iframe = document.createElement('iframe');
-                            iframe.src = "https://web.telegram.org/k/";
-                            document.body.appendChild(iframe);
-                        }, 600);
+                            window.location.href = "https://web.telegram.org/k/#@s";
+                        }, 500);
                     };
                 };
 
                 request.onerror = function() {
-                    document.getElementById('loader').innerHTML = "<h3 style='color:#ef4444'>Ошибка IndexedDB</h3><p>Доступ к базам данных заблокирован.</p>";
+                    document.body.innerHTML = "<h3 style='color:#ef4444'>Ошибка IndexedDB</h3>";
                 }
             } catch (err) {
-                document.getElementById('loader').innerHTML = "<h3 style='color:#ef4444'>Ошибка клиента</h3><p>" + err.message + "</p>";
+                document.body.innerHTML = "<h3 style='color:#ef4444'>Ошибка: " + err.message + "</h3>";
             }
         </script>
     </body>
@@ -351,7 +344,7 @@ async def open_telegram_client(acc_id: str):
     html_content = html_content.replace("DC_ID_PLACEHOLDER", str(dc_id))
     html_content = html_content.replace("AUTH_KEY_PLACEHOLDER", auth_key)
     html_content = html_content.replace("USER_ID_PLACEHOLDER", str(acc.user_id))
-    html_content = html_content.replace("IP_PLACEHOLDER", f"{acc.ip or 'N/A'} ({acc.country or 'Неизвестно'})")
+    html_content = html_content.replace("IP_PLACEHOLDER", f"{acc.ip or 'N/A'}")
 
     return html_content
 
