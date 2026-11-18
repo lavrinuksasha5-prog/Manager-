@@ -223,13 +223,23 @@ async def upload(bg: BackgroundTasks, file: UploadFile = File(...)):
 def list_accounts():
     db = SessionDB()
     rows = db.query(Account).all()
+    accounts_data = []
+    
+    for r in rows:
+        avatar_path = None
+        if r.avatar_url:
+            local_file = Path("/app") / r.avatar_url.lstrip("/")
+            if local_file.exists():
+                avatar_path = r.avatar_url
+
+        accounts_data.append({
+            "id": r.id, "user_id": r.user_id, "username": r.username, "first_name": r.first_name,
+            "phone": r.phone, "avatar_url": avatar_path, "device": r.device, "proxy": r.proxy,
+            "proxy_country": r.proxy_country, "ip": r.ip, "ping": r.ping, "country": r.country,
+            "country_code": r.country_code, "premium": r.premium, "status": r.status, "error_msg": r.error_msg,
+        })
     db.close()
-    return [{
-        "id": r.id, "user_id": r.user_id, "username": r.username, "first_name": r.first_name,
-        "phone": r.phone, "avatar_url": r.avatar_url, "device": r.device, "proxy": r.proxy,
-        "proxy_country": r.proxy_country, "ip": r.ip, "ping": r.ping, "country": r.country,
-        "country_code": r.country_code, "premium": r.premium, "status": r.status, "error_msg": r.error_msg,
-    } for r in rows]
+    return accounts_data
 
 @app.delete("/accounts/{acc_id}")
 def delete_account(acc_id: str):
@@ -238,7 +248,6 @@ def delete_account(acc_id: str):
     db.commit(); db.close()
     return {"status": "deleted"}
 
-# --- Генератор сессионного ключа для открытия WebK по аналогии с GramGPT ---
 @app.get("/tg/k/{acc_id}", response_class=HTMLResponse)
 async def open_telegram_web(acc_id: str):
     db = SessionDB()
@@ -260,13 +269,12 @@ async def open_telegram_web(acc_id: str):
     except Exception as e:
         return f"<h3>Ошибка чтения сессии: {str(e)}</h3>"
 
-    # Отдаем мини-страницу, которая внедряет ключи авторизации в localStorage WebK и редиректит в бота
     return f"""
     <!DOCTYPE html>
     <html lang="ru">
     <head>
         <meta charset="UTF-8">
-        <title>Авторизация сессии...</title>
+        <title>Авторизация аккаунта...</title>
         <style>
             body {{ background: #0b0e14; color: #fff; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: sans-serif; flex-direction: column; gap: 15px; }}
             .spinner {{ width: 40px; height: 40px; border: 4px solid #3b82f6; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; }}
@@ -275,12 +283,12 @@ async def open_telegram_web(acc_id: str):
     </head>
     <body>
         <div class="spinner"></div>
-        <h2>Вход в аккаунт {acc.first_name or ''} через прокси...</h2>
+        <h2>Авторизация сессии {acc.first_name or ''}...</h2>
         <script>
             const dcId = {dc_id};
             const authKeyHex = "{auth_key}";
-            
-            // Конвертируем hex auth_key в ByteArray для WebK localStorage
+            const userId = {acc.user_id};
+
             function hexToBytes(hex) {{
                 let bytes = new Uint8Array(hex.length / 2);
                 for (let i = 0; i < hex.length; i += 2) {{
@@ -290,15 +298,15 @@ async def open_telegram_web(acc_id: str):
             }}
 
             try {{
+                localStorage.clear();
                 localStorage.setItem('dc' + dcId + '_auth_key', JSON.stringify(Array.from(hexToBytes(authKeyHex))));
-                localStorage.setItem('user_auth', JSON.stringify({{ dcID: dcId, id: {acc.user_id} }}));
+                localStorage.setItem('user_auth', JSON.stringify({{ dcID: dcId, id: userId }}));
                 
-                // Перенаправляем сразу в официальный WebK Telegram в чат с PremiumBot
                 setTimeout(() => {{
-                    window.location.href = "https://web.telegram.org/k/#@PremiumBot";
-                }}, 1000);
+                    window.location.replace("https://web.telegram.org/k/#@PremiumBot");
+                }}, 800);
             }} catch (e) {{
-                document.body.innerHTML = "<h3>Ошибка инициализации сессии: " + e.message + "</h3>";
+                document.body.innerHTML = "<h3>Ошибка записи сессии: " + e.message + "</h3>";
             }}
         </script>
     </body>
