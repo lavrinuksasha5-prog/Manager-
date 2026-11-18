@@ -5,3 +5,4 @@ telethon==1.36.0
 sqlalchemy==2.0.35
 pydantic==2.9.2
 opentele2
+requests
