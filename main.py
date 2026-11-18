@@ -1,4 +1,4 @@
-import os, uuid, time, aiohttp, zipfile, shutil, sqlite3
+import os, uuid, time, aiohttp, zipfile, shutil, sqlite3, socks
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -70,19 +70,33 @@ def parse_proxy(line: str):
         line = line.replace("http://", "")
 
     user = passw = None
+    
+    # Жесткий и надежный парсинг: ищем хост и порт с конца строки
     if "@" in line:
-        auth, addr = line.split("@", 1)
-        if ":" in auth: user, passw = auth.split(":", 1)
-        host, port = addr.split(":")
-    elif line.count(":") == 3:
-        host, port, user, passw = line.split(":")
-    elif line.count(":") == 1:
-        host, port = line.split(":")
+        auth, addr_port = line.rsplit("@", 1)
+        if ":" in auth:
+            user, passw = auth.split(":", 1)
+        else:
+            user = auth
+        if ":" in addr_port:
+            host, port = addr_port.rsplit(":", 1)
+        else:
+            return None
     else:
-        return None
+        # Если формата user:pass@ip:port нет, но есть 4 части через двоеточие (ip:port:user:pass)
+        parts = line.split(":")
+        if len(parts) >= 4:
+            host = parts[0]
+            port = parts[1]
+            user = parts[2]
+            passw = ":".join(parts[3:])
+        elif len(parts) == 2:
+            host, port = parts
+        else:
+            return None
 
     port = ''.join(filter(str.isdigit, port))
-    if not port: return None
+    if not host or not port: return None
     return {"proxy_type": proxy_type, "addr": host, "port": int(port), "username": user, "password": passw}
 
 def pop_free_proxy(db):
@@ -104,8 +118,18 @@ async def get_proxy_info(proxy: dict):
         pass
     return {"ip": "N/A", "country": "Неизвестно"}, 0
 
+def get_telethon_proxy_tuple(proxy_dict: dict):
+    s_type = socks.SOCKS5 if proxy_dict.get('proxy_type') == 'socks5' else socks.HTTP
+    addr = proxy_dict['addr']
+    port = int(proxy_dict['port'])
+    user = proxy_dict.get('username')
+    pw = proxy_dict.get('password')
+    
+    if user and pw:
+        return (s_type, addr, port, True, user, pw)
+    return (s_type, addr, port)
+
 def find_local_2fa(session_file_path: Path) -> str:
-    """Ищет файл с 2FA паролем в той же папке, где лежит .session файл"""
     try:
         parent_dir = session_file_path.parent
         for file in parent_dir.iterdir():
@@ -119,8 +143,7 @@ def find_local_2fa(session_file_path: Path) -> str:
     return None
 
 async def validate_and_auth_session(session_path: Path, proxy_dict: dict, acc_id: str):
-    p_type = proxy_dict.get('proxy_type', 'http')
-    proxy_tuple = (p_type, proxy_dict['addr'], proxy_dict['port'], True, proxy_dict.get('username'), proxy_dict.get('password')) if proxy_dict.get('username') else (p_type, proxy_dict['addr'], proxy_dict['port'])
+    proxy_tuple = get_telethon_proxy_tuple(proxy_dict)
     
     API_ID = 2040
     API_HASH = "b18441a1ff607e10a989891a5462e627"
@@ -179,8 +202,6 @@ async def process_zip_archive(zip_path: Path):
     for sf in session_files:
         acc_id = uuid.uuid4().hex
         session_dest = SESS_DIR / f"{acc_id}.session"
-        
-        # Безопасное копирование между разными томами (исправление ошибку Errno 18)
         shutil.copy(str(sf), str(session_dest))
 
         _, proxy_dict = pop_free_proxy(db)
