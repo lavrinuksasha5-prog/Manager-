@@ -10,78 +10,90 @@
             --card-bg: #131823;
             --border-color: #1e2636;
             --accent-color: #3b82f6;
-            --text-main: #f3f4f6;
+            --accent-hover: #2563eb;
+            --text-main: #ffffff;
             --text-muted: #9ca3af;
-            --success: #10b981;
-            --error: #ef4444;
+            --danger: #ef4444;
+            --success: #22c55e;
         }
+
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
         body { background-color: var(--bg-color); color: var(--text-main); padding: 20px; }
-        .container { max-width: 800px; margin: 0 auto; }
-        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; background: var(--card-bg); padding: 16px 20px; border-radius: 12px; border: 1px solid var(--border-color); }
-        .logo { display: flex; align-items: center; gap: 10px; font-weight: bold; font-size: 18px; }
-        .logo-icon { background: var(--accent-color); color: white; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 8px; }
-        .btn { background: var(--accent-color); color: white; border: none; padding: 10px 16px; border-radius: 8px; cursor: pointer; font-weight: 600; text-decoration: none; display: inline-block; text-align: center; transition: opacity 0.2s; }
-        .btn:hover { opacity: 0.9; }
-        .btn-danger { background: var(--error); }
-        .btn-secondary { background: #374151; }
-        
-        .accounts-list { display: flex; flex-direction: column; gap: 16px; }
-        .account-card { background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-        .acc-header { display: flex; justify-content: space-between; align-items: center; }
-        .acc-info { display: flex; align-items: center; gap: 12px; }
-        .avatar { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; background: #374151; }
-        .acc-name { font-weight: 600; font-size: 16px; }
-        .acc-username { color: var(--text-muted); font-size: 13px; }
-        .badge { padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
-        .badge-online { background: rgba(16, 185, 129, 0.15); color: var(--success); }
-        .badge-error { background: rgba(239, 68, 68, 0.15); color: var(--error); }
-        
-        .acc-details { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 8px; font-size: 12px; }
-        .detail-item label { color: var(--text-muted); display: block; margin-bottom: 2px; }
-        .detail-item val { font-weight: 600; }
-        
-        .acc-footer { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
-        .proxy-info { color: var(--text-muted); font-size: 13px; }
-        .acc-actions { display: flex; gap: 8px; }
 
-        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); justify-content: center; align-items: center; z-index: 1000; }
-        .modal-content { background: var(--card-bg); border: 1px solid var(--border-color); padding: 24px; border-radius: 12px; width: 100%; max-width: 450px; display: flex; flex-direction: column; gap: 16px; }
-        .modal-content h3 { font-size: 18px; }
-        .form-group { display: flex; flex-direction: column; gap: 6px; }
-        .form-group label { font-size: 13px; color: var(--text-muted); }
-        .form-control { background: var(--bg-color); border: 1px solid var(--border-color); color: white; padding: 10px; border-radius: 8px; font-size: 14px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; border-bottom: 1px solid var(--border-color); padding-bottom: 15px; }
+        h1 { font-size: 24px; font-weight: 600; color: var(--accent-color); }
+
+        .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 25px; }
+        .card { background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+        .card h3 { font-size: 16px; margin-bottom: 12px; color: var(--text-muted); }
+
+        textarea { width: 100%; height: 100px; background: #0b0e14; border: 1px solid var(--border-color); border-radius: 8px; color: #fff; padding: 10px; resize: none; margin-bottom: 10px; font-size: 13px; }
+        textarea:focus { outline: none; border-color: var(--accent-color); }
+
+        .file-upload { display: flex; align-items: center; gap: 10px; }
+        input[type="file"] { display: none; }
+        .upload-btn, button { background: var(--accent-color); color: white; border: none; padding: 10px 16px; border-radius: 8px; cursor: pointer; font-weight: 500; font-size: 14px; transition: background 0.2s; }
+        .upload-btn:hover, button:hover { background: var(--accent-hover); }
+
+        table { width: 100%; border-collapse: collapse; background: var(--card-bg); border-radius: 12px; overflow: hidden; border: 1px solid var(--border-color); }
+        th, td { padding: 12px 15px; text-align: left; font-size: 14px; border-bottom: 1px solid var(--border-color); }
+        th { background: #182030; color: var(--text-muted); font-weight: 500; }
+        tr:last-child td { border-bottom: none; }
+
+        .btn-open { background: var(--success); padding: 6px 12px; font-size: 12px; border-radius: 6px; }
+        .btn-open:hover { background: #16a34a; }
+        .btn-del { background: var(--danger); padding: 6px 12px; font-size: 12px; border-radius: 6px; }
+        .btn-del:hover { background: #dc2626; }
+
+        .status-badge { padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
+        .status-valid { background: rgba(34, 197, 94, 0.15); color: var(--success); }
+        .status-error { background: rgba(239, 68, 68, 0.15); color: var(--danger); }
     </style>
 </head>
 <body>
     <div class="container">
         <header>
-            <div class="logo">
-                <div class="logo-icon">T</div>
-                <span>Менеджер</span>
-            </div>
-            <button class="btn" onclick="openImportModal()">+ Импорт</button>
+            <h1>TWKS Manager</h1>
+            <span style="color: var(--text-muted); font-size: 13px;">Telegram Account Management</span>
         </header>
 
-        <div class="accounts-list" id="accountsList"></div>
-    </div>
+        <div class="panels">
+            <!-- Загрузка прокси -->
+            <div class="card">
+                <h3>Загрузка прокси (формат: IP:PORT:USER:PASS)</h3>
+                <textarea id="proxyText" placeholder="192.168.1.1:8000:user:pass"></textarea>
+                <button onclick="uploadProxies()">Загрузить прокси</button>
+            </div>
 
-    <!-- Модалка импорта -->
-    <div class="modal" id="importModal">
-        <div class="modal-content">
-            <h3>Импорт прокси и tdata</h3>
-            <div class="form-group">
-                <label>Прокси (HTTP формат user:pass@host:port)</label>
-                <textarea class="form-control" id="proxyInput" rows="4" placeholder="Вставьте прокси..."></textarea>
+            <!-- Загрузка ZIP с сессиями -->
+            <div class="card">
+                <h3>Загрузка сессий (ZIP архивы tdata / сессии)</h3>
+                <div class="file-upload" style="margin-top: 35px;">
+                    <label class="upload-btn" for="zipFile">Выбрать ZIP файл</label>
+                    <input type="file" id="zipFile" accept=".zip" onchange="uploadZip()">
+                    <span id="fileName" style="color: var(--text-muted); font-size: 13px;">Файл не выбран</span>
+                </div>
             </div>
-            <div class="form-group">
-                <label>ZIP архив с tdata</label>
-                <input type="file" class="form-control" id="zipInput" accept=".zip">
-            </div>
-            <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
-                <button class="btn btn-secondary" onclick="closeImportModal()">Отмена</button>
-                <button class="btn" onclick="submitImport()">Загрузить</button>
-            </div>
+        </div>
+
+        <!-- Таблица аккаунтов -->
+        <div class="card" style="padding: 0; overflow: hidden;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Телефон / User ID</th>
+                        <th>Имя</th>
+                        <th>Прокси / IP</th>
+                        <th>Гео</th>
+                        <th>Статус</th>
+                        <th>Действия</th>
+                    </tr>
+                </thead>
+                <tbody id="accountsTable">
+                    <tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Загрузка аккаунтов...</td></tr>
+                </tbody>
+            </table>
         </div>
     </div>
 
@@ -89,83 +101,83 @@
         async function loadAccounts() {
             try {
                 const res = await fetch('/accounts');
-                const accounts = await res.json();
-                const list = document.getElementById('accountsList');
-                list.innerHTML = '';
-
-                if (accounts.length === 0) {
-                    list.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 40px;">Нет добавленных аккаунтов</div>';
+                const data = await res.json();
+                const tbody = document.getElementById('accountsTable');
+                
+                if (data.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Нет добавленных аккаунтов</td></tr>`;
                     return;
                 }
 
-                accounts.forEach(acc => {
-                    const card = document.createElement('div');
-                    card.className = 'account-card';
-                    card.innerHTML = `
-                        <div class="acc-header">
-                            <div class="acc-info">
-                                <img src="${acc.avatar_url || 'https://via.placeholder.com/44'}" class="avatar" alt="">
-                                <div>
-                                    <div class="acc-name">${acc.first_name || 'Аккаунт'}</div>
-                                    <div class="acc-username">@${acc.username || 'no_username'}</div>
-                                </div>
-                            </div>
-                            <span class="badge ${acc.status === 'valid' ? 'badge-online' : 'badge-error'}">${acc.status === 'valid' ? 'ONLINE' : 'ERROR'}</span>
-                        </div>
-                        <div class="acc-details">
-                            <div class="detail-item"><label>Страна</label><val>${acc.country || 'Неизвестно'}</val></div>
-                            <div class="detail-item"><label>IP</label><val>${acc.ip || 'N/A'}</val></div>
-                            <div class="detail-item"><label>Пинг</label><val>${acc.ping}ms</val></div>
-                            <div class="detail-item"><label>Premium</label><val>${acc.premium ? 'Да' : 'Нет'}</val></div>
-                        </div>
-                        <div class="acc-footer">
-                            <div class="proxy-info">${acc.proxy || 'Нет прокси'}</div>
-                            <div class="acc-actions">
-                                <a href="/tg/k/${acc.id}" target="_blank" class="btn">Купить</a>
-                                <button class="btn btn-danger" onclick="deleteAccount('${acc.id}')">Удалить</button>
-                            </div>
-                        </div>
-                    `;
-                    list.appendChild(card);
-                });
-            } catch (e) {
-                console.error("Ошибка загрузки", e);
+                tbody.innerHTML = data.map(acc => `
+                    <tr>
+                        <td><b>${acc.phone || 'N/A'}</b><br><span style="font-size:11px; color:var(--text-muted)">ID: ${acc.user_id || 'N/A'}</span></td>
+                        <td>${acc.first_name || 'Без имени'} <br><span style="font-size:11px; color:var(--text-muted)">@${acc.username || 'no_username'}</span></td>
+                        <td>${acc.proxy || 'N/A'}<br><span style="font-size:11px; color:var(--text-muted)">IP: ${acc.ip || 'N/A'}</span></td>
+                        <td>${acc.country || 'Неизвестно'}</td>
+                        <td><span class="status-badge status-${acc.status}">${acc.status}</span></td>
+                        <td>
+                            ${acc.status === 'valid' ? `<button class="btn-open" onclick="openClient('${acc.id}')">Открыть</button>` : `<span style="font-size:12px; color:var(--danger)">${acc.error_msg || 'Ошибка'}</span>`}
+                            <button class="btn-del" onclick="deleteAccount('${acc.id}')">Удалить</button>
+                        </td>
+                    </tr>
+                `).join('');
+            } catch (err) {
+                console.error("Ошибка загрузки аккаунтов:", err);
             }
         }
 
-        function openImportModal() { document.getElementById('importModal').style.display = 'flex'; }
-        function closeImportModal() { document.getElementById('importModal').style.display = 'none'; }
-
-        async function submitImport() {
-            const proxyText = document.getElementById('proxyInput').value;
-            const zipFile = document.getElementById('zipInput').files[0];
-
-            if (proxyText) {
-                await fetch('/proxies-text', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({text: proxyText})
-                });
-            }
-            if (zipFile) {
-                const formData = new FormData();
-                formData.append('file', zipFile);
-                await fetch('/upload', { method: 'POST', body: formData });
-            }
-
-            closeImportModal();
-            setTimeout(loadAccounts, 2000);
-        }
-
-        async function deleteAccount(accId) {
-            if (confirm('Удалить аккаунт?')) {
-                await fetch(`/accounts/${accId}`, { method: 'DELETE' });
-                loadAccounts();
+        async function uploadProxies() {
+            const text = document.getElementById('proxyText').value;
+            if (!text.trim()) return alert("Введите прокси!");
+            
+            const res = await fetch('/proxies-text', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text })
+            });
+            
+            if (res.ok) {
+                alert("Прокси успешно добавлены!");
+                document.getElementById('proxyText').value = '';
+            } else {
+                alert("Ошибка загрузки прокси");
             }
         }
 
-        loadAccounts();
+        async function uploadZip() {
+            const fileInput = document.getElementById('zipFile');
+            if (fileInput.files.length === 0) return;
+
+            const file = fileInput.files[0];
+            document.getElementById('fileName').innerText = file.name;
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const res = await fetch('/upload', { method: 'POST', body: formData });
+            if (res.ok) {
+                alert("Архив принят в обработку!");
+                setTimeout(loadAccounts, 2000);
+            } else {
+                alert("Ошибка загрузки архива");
+            }
+        }
+
+        async function deleteAccount(id) {
+            if (!confirm("Удалить этот аккаунт?")) return;
+            await fetch('/accounts/' + id, { method: 'DELETE' });
+            loadAccounts();
+        }
+
+        // Открытие кастомного клиентского сайта в один клик
+        function openClient(id) {
+            window.open('/client/' + id, '_blank');
+        }
+
+        // Автообновление списка каждые 5 секунд
         setInterval(loadAccounts, 5000);
+        loadAccounts();
     </script>
 </body>
 </html>
