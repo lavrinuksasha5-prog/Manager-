@@ -3,7 +3,7 @@ from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, String, Integer, DateTime, Boolean
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -17,7 +17,7 @@ from telethon import TelegramClient
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# --- Конфиг ---
+# --- Конфиг путей ---
 DATA_DIR = Path("/data")
 SESS_DIR = DATA_DIR / "sessions"
 UPLOAD_DIR = Path("/app/uploads")
@@ -28,7 +28,7 @@ STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# --- БД ---
+# --- База данных ---
 db_file = DATA_DIR / "twks.db"
 engine = create_engine(f"sqlite:///{db_file}")
 Base = declarative_base()
@@ -37,7 +37,7 @@ SessionDB = sessionmaker(bind=engine)
 class Account(Base):
     __tablename__ = "accounts"
     id = Column(String, primary_key=True)
-    user_id = Column(Integer)
+    user_id = Column(Integer, nullable=True)
     username = Column(String, nullable=True)
     first_name = Column(String, nullable=True)
     phone = Column(String, nullable=True)
@@ -68,6 +68,7 @@ Base.metadata.create_all(engine)
 class ProxyList(BaseModel):
     text: str
 
+# --- Парсер прокси ---
 def parse_proxy(line: str):
     line = line.strip().rstrip('/')
     if not line or line.startswith("#"): return None
@@ -94,6 +95,7 @@ def pop_free_proxy(db):
     if not p: return None, None
     return p, {"proxy_type": p.proxy_type, "addr": p.addr, "port": p.port, "username": p.username, "password": p.password}
 
+# --- Реальная проверка IP, пинга и гео через прокси (Пункт 1 & 5 безопасности) ---
 async def get_proxy_info(proxy: dict):
     COUNTRY_RU = {
         "PT": "Португалия", "TR": "Турция", "RU": "Россия", "US": "США",
@@ -116,11 +118,12 @@ async def get_proxy_info(proxy: dict):
         pass
     return {"ip": "N/A", "country_code": "UN", "country": "Неизвестно"}, 0
 
+# --- Генерация уникального устройства (Пункт 1) ---
 def generate_random_device(acc_id: str):
     devices = [
-        {"api": API.TelegramAndroid.Generate(unique_id=acc_id), "device_str": "Android 13.0"},
-        {"api": API.TelegramIOS.Generate(unique_id=acc_id), "device_str": "iOS 17.2"},
-        {"api": API.TelegramDesktop.Generate(unique_id=acc_id), "device_str": "macOS Sonoma"}
+        {"api": API.TelegramAndroid.Generate(unique_id=acc_id), "device_str": "Android 13.0 (Telegram)"},
+        {"api": API.TelegramIOS.Generate(unique_id=acc_id), "device_str": "iOS 17.2 (Telegram)"},
+        {"api": API.TelegramDesktop.Generate(unique_id=acc_id), "device_str": "macOS Sonoma (Desktop)"}
     ]
     selected = random.choice(devices)
     return selected["api"], selected["device_str"]
@@ -131,6 +134,7 @@ def extract_tdata(zip_path: str) -> list:
     with zipfile.ZipFile(zip_path) as zf: zf.extractall(out)
     return [p for p in out.rglob("*") if p.is_dir() and ((p / "key_datas").exists() or any(f.name.isupper() and len(f.name) == 16 for f in p.glob("*")))]
 
+# --- Валидация и конвертация сессии с защитами ---
 async def validate(tdata_path: str, proxy_dict: dict, acc_id: str):
     tdesk = TDesktop(tdata_path)
     session_file = SESS_DIR / f"{acc_id}.session"
@@ -138,13 +142,23 @@ async def validate(tdata_path: str, proxy_dict: dict, acc_id: str):
 
     chosen_api, device_string = generate_random_device(acc_id)
     client = await tdesk.ToTelethon(str(session_file), UseCurrentSession, api=chosen_api)
-    client._proxy = {'proxy_type': 'http', 'addr': proxy_dict['addr'], 'port': proxy_dict['port'], 'username': proxy_dict['username'], 'password': proxy_dict['password']}
+    
+    # Жесткая привязка прокси к клиенту
+    client._proxy = {
+        'proxy_type': 'http', 
+        'addr': proxy_dict['addr'], 
+        'port': proxy_dict['port'], 
+        'username': proxy_dict.get('username'), 
+        'password': proxy_dict.get('password')
+    }
 
     net_info, ping_ms = await get_proxy_info(proxy_dict)
+    
     await client.connect()
     try:
         if not await client.is_user_authorized():
-            return {"status": "invalid", "error_msg": "Сессия не авторизована"}
+            return {"status": "invalid", "error_msg": "Сессия не авторизована (требуется вход)"}
+        
         me = await client.get_me()
         
         avatar_url = None
@@ -154,12 +168,23 @@ async def validate(tdata_path: str, proxy_dict: dict, acc_id: str):
             avatar_url = f"/static/avatar_{acc_id}.jpg"
 
         return {
-            "status": "valid", "user_id": me.id, "username": me.username,
-            "first_name": me.first_name, "phone": me.phone, "avatar_url": avatar_url,
-            "device": device_string, "country": net_info["country"], "country_code": net_info["country_code"],
-            "proxy_country": net_info["country"], "ip": net_info["ip"], "ping": ping_ms,
-            "premium": getattr(me, "premium", False), "error_msg": None
+            "status": "valid", 
+            "user_id": me.id, 
+            "username": me.username,
+            "first_name": me.first_name, 
+            "phone": me.phone, 
+            "avatar_url": avatar_url,
+            "device": device_string, 
+            "country": net_info["country"], 
+            "country_code": net_info["country_code"],
+            "proxy_country": net_info["country"], 
+            "ip": net_info["ip"], 
+            "ping": ping_ms,
+            "premium": getattr(me, "premium", False), 
+            "error_msg": None
         }
+    except Exception as e:
+        return {"status": "error", "error_msg": str(e)}
     finally:
         await client.disconnect()
 
@@ -172,7 +197,7 @@ async def process_zip(zip_path: str):
         acc_id = str(uuid.uuid4())
         _, proxy_dict = pop_free_proxy(db)
         if not proxy_dict:
-            db.add(Account(id=acc_id, status="error", error_msg="Нет прокси"))
+            db.add(Account(id=acc_id, status="error", error_msg="Нет свободных прокси в базе"))
             db.commit(); continue
 
         try:
@@ -181,30 +206,43 @@ async def process_zip(zip_path: str):
             if res.get("phone"): existing_phones.add(res["phone"])
 
             db.add(Account(
-                id=acc_id, user_id=res.get("user_id"), username=res.get("username"),
-                first_name=res.get("first_name"), phone=res.get("phone"),
-                avatar_url=res.get("avatar_url"), device=res.get("device"),
+                id=acc_id, 
+                user_id=res.get("user_id"), 
+                username=res.get("username"),
+                first_name=res.get("first_name"), 
+                phone=res.get("phone"),
+                avatar_url=res.get("avatar_url"), 
+                device=res.get("device"),
                 proxy=f"{proxy_dict['addr']}:{proxy_dict['port']}",
-                proxy_country=res.get("proxy_country"), ip=res.get("ip"), ping=res.get("ping"),
-                country=res.get("country"), country_code=res.get("country_code"),
-                premium=res.get("premium"), status=res["status"], error_msg=res.get("error_msg")
+                proxy_country=res.get("proxy_country"), 
+                ip=res.get("ip"), 
+                ping=res.get("ping"),
+                country=res.get("country"), 
+                country_code=res.get("country_code"),
+                premium=res.get("premium"), 
+                status=res.get("status", "error"), 
+                error_msg=res.get("error_msg")
             ))
         except Exception as e:
             db.add(Account(id=acc_id, status="error", proxy="direct", error_msg=str(e)))
         db.commit()
     db.close()
 
+# --- Роуты панели ---
 @app.get("/")
 def root(): return FileResponse("index.html")
 
 @app.post("/proxies-text")
 async def upload_proxies_text(data: ProxyList):
     db = SessionDB()
+    count = 0
     for line in data.text.splitlines():
         p = parse_proxy(line)
-        if p: db.add(Proxy(addr=p["addr"], port=p["port"], username=p["username"], password=p["password"], proxy_type="http"))
+        if p:
+            db.add(Proxy(addr=p["addr"], port=p["port"], username=p["username"], password=p["password"], proxy_type="http"))
+            count += 1
     db.commit(); db.close()
-    return {"status": "ok"}
+    return {"status": "ok", "added": count}
 
 @app.post("/upload")
 async def upload(bg: BackgroundTasks, file: UploadFile = File(...)):
@@ -225,10 +263,23 @@ def list_accounts():
             if local_file.exists():
                 avatar_path = r.avatar_url
         accounts_data.append({
-            "id": r.id, "user_id": r.user_id, "username": r.username, "first_name": r.first_name,
-            "phone": r.phone, "avatar_url": avatar_path, "device": r.device, "proxy": r.proxy,
-            "proxy_country": r.proxy_country, "ip": r.ip, "ping": r.ping, "country": r.country,
-            "country_code": r.country_code, "premium": r.premium, "status": r.status, "error_msg": r.error_msg,
+            "id": r.id, 
+            "user_id": r.user_id, 
+            "username": r.username, 
+            "first_name": r.first_name,
+            "phone": r.phone, 
+            "avatar_url": avatar_path, 
+            "device": r.device, 
+            "proxy": r.proxy,
+            "proxy_country": r.proxy_country, 
+            "ip": r.ip, 
+            "ping": r.ping, 
+            "country": r.country,
+            "country_code": r.country_code, 
+            "premium": r.premium, 
+            "status": r.status, 
+            "error_msg": r.error_msg,
+            "created_at": r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else ""
         })
     db.close()
     return accounts_data
@@ -236,109 +287,14 @@ def list_accounts():
 @app.delete("/accounts/{acc_id}")
 def delete_account(acc_id: str):
     db = SessionDB()
-    db.query(Account).filter_by(id=acc_id).delete()
-    db.commit(); db.close()
-    return {"status": "deleted"}
-
-@app.get("/client/{acc_id}", response_class=HTMLResponse)
-async def open_telegram_client(acc_id: str):
-    db = SessionDB()
     acc = db.query(Account).filter_by(id=acc_id).first()
+    if acc:
+        session_file = SESS_DIR / f"{acc_id}.session"
+        if session_file.exists(): session_file.unlink()
+        db.delete(acc)
+        db.commit()
     db.close()
-    if not acc:
-        return "<h3>Аккаунт не найден</h3>"
-
-    session_file = SESS_DIR / f"{acc_id}.session"
-    if not session_file.exists():
-        return "<h3>Файл сессии не найден</h3>"
-
-    try:
-        client = TelegramClient(str(session_file), 2040, "b18441a1ff607e10a989891a5462e627")
-        await client.connect()
-        auth_key = client.session.auth_key.key.hex()
-        dc_id = client.session.dc_id
-        user_id = acc.user_id
-        await client.disconnect()
-    except Exception as e:
-        return f"<h3>Ошибка чтения сессии: {str(e)}</h3>"
-
-    html_content = """
-    <!DOCTYPE html>
-    <html lang="ru">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-        <title>Telegram Web Client</title>
-        <style>
-            body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #0b0e14; overflow: hidden; }
-            #loader { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #0b0e14; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 9999; color: #fff; font-family: sans-serif; }
-            .spinner { width: 48px; height: 48px; border: 4px solid #3b82f6; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
-            @keyframes spin { to { transform: rotate(360deg); } }
-            iframe { width: 100%; height: 100%; border: none; display: none; }
-        </style>
-    </head>
-    <body>
-        <div id="loader">
-            <div class="spinner"></div>
-            <h2 style="margin-top: 15px; font-weight: 500; font-size: 15px;">Запуск сессии...</h2>
-        </div>
-
-        <script>
-            const dcId = DC_ID_PLACEHOLDER;
-            const authKeyHex = "AUTH_KEY_PLACEHOLDER";
-            const userId = USER_ID_PLACEHOLDER;
-
-            function hexToBytes(hex) {
-                let bytes = new Uint8Array(hex.length / 2);
-                for (let i = 0; i < hex.length; i += 2) {
-                    bytes[i/2] = parseInt(hex.substr(i, 2), 16);
-                }
-                return bytes;
-            }
-
-            try {
-                const request = indexedDB.open('tt-data', 1);
-                
-                request.onupgradeneeded = function(e) {
-                    const db = e.target.result;
-                    if (!db.objectStoreNames.contains('local-storage')) {
-                        db.createObjectStore('local-storage');
-                    }
-                };
-
-                request.onsuccess = function(e) {
-                    const db = e.target.result;
-                    const tx = db.transaction(['local-storage'], 'readwrite');
-                    const store = tx.objectStore('local-storage');
-                    
-                    store.put(JSON.stringify(Array.from(hexToBytes(authKeyHex))), 'dc' + dcId + '_auth_key');
-                    store.put(JSON.stringify({ dcID: dcId, id: userId }), 'user_auth');
-
-                    tx.oncomplete = function() {
-                        document.getElementById('loader').style.display = 'none';
-                        const iframe = document.createElement('iframe');
-                        iframe.src = "https://web.telegram.org/k/";
-                        iframe.style.display = 'block';
-                        document.body.appendChild(iframe);
-                    };
-                };
-
-                request.onerror = function() {
-                    document.getElementById('loader').innerHTML = "<h3 style='color:#ef4444'>Ошибка IndexedDB</h3>";
-                };
-            } catch (err) {
-                document.getElementById('loader').innerHTML = "<h3 style='color:#ef4444'>Ошибка: " + err.message + "</h3>";
-            }
-        </script>
-    </body>
-    </html>
-    """
-
-    html_content = html_content.replace("DC_ID_PLACEHOLDER", str(dc_id))
-    html_content = html_content.replace("AUTH_KEY_PLACEHOLDER", auth_key)
-    html_content = html_content.replace("USER_ID_PLACEHOLDER", str(user_id))
-
-    return html_content
+    return {"status": "deleted"}
 
 if __name__ == "__main__":
     import uvicorn
