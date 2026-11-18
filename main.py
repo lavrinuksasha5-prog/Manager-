@@ -1,4 +1,4 @@
-import os, uuid, zipfile, random, hashlib
+import os, uuid, zipfile, random, hashlib, traceback
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,7 +10,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 from telethon import TelegramClient
 from opentele2.td import TDesktop
-from opentele2.api import API
+from opentele2.api import API, UseCurrentSession
 
 # --- Конфиг ---
 API_ID = 2040
@@ -56,7 +56,6 @@ class Proxy(Base):
 
 Base.metadata.create_all(engine)
 
-# --- Модель для текстовых прокси ---
 class ProxyList(BaseModel):
     text: str
 
@@ -69,7 +68,6 @@ def parse_proxy(line: str):
     proxy_type = "socks5"
     if line.startswith("socks5://"):
         line = line.replace("socks5://", "")
-        proxy_type = "socks5"
     elif line.startswith("http://"):
         line = line.replace("http://", "")
         proxy_type = "http"
@@ -123,6 +121,7 @@ def extract_tdata(zip_path: str) -> list:
     for path in out.rglob("*"):
         if not path.is_dir():
             continue
+        # Ищем папки, где есть key_datas или файлы формата tdata
         if (path / "key_datas").exists() or any(
             f.name.isupper() and len(f.name) == 16 for f in path.glob("*")
         ):
@@ -135,23 +134,36 @@ async def validate(tdata_path: str, proxy: dict, acc_id: str):
     dev = random.choice(DEVICES)
     session = str(SESS_DIR / f"{acc_id}.session")
     
+    print(f"[DEBUG] Конвертация tdata: {tdata_path}")
+    
+    # Конвертируем в Telethon сессию с флагом использования текущей сессии
     client = await tdesk.ToTelethon(
         session, 
+        UseCurrentSession,
         api=API.TelegramDesktop.Generate(
             api_id=API_ID, 
             api_hash=API_HASH, 
             device_model=dev["device_model"], 
             system_version=dev["system_version"],
             app_version=dev["app_version"]
-        ),
-        proxy=proxy
+        )
     )
     
+    # Привязываем прокси, если он есть
+    if proxy:
+        print(f"[DEBUG] Подключаем прокси: {proxy['addr']}:{proxy['port']}")
+        client._proxy = proxy
+    else:
+        print("[WARN] Прокси не найден, подключаемся напрямую")
+
     await client.connect()
     try:
         if not await client.is_user_authorized():
+            print("[DEBUG] Сессия не авторизована (invalid)")
             return {"status": "invalid"}
+        
         me = await client.get_me()
+        print(f"[DEBUG] Успех! Аккаунт: {me.username or me.phone}")
         return {
             "status": "valid",
             "user_id": me.id,
@@ -173,6 +185,7 @@ async def process_zip(zip_path: str):
     for td in dirs:
         acc_id = str(uuid.uuid4())
         proxy = pop_free_proxy(db)
+        print(f"[TEST] Обработка аккаунта {acc_id} | tdata={td}")
         try:
             res = await validate(td, proxy, acc_id)
             db.add(Account(
@@ -185,7 +198,8 @@ async def process_zip(zip_path: str):
                 status=res["status"],
             ))
         except Exception as e:
-            print(f"[ERR] {acc_id}: {e}")
+            print(f"[ERR] Ошибка на аккаунте {acc_id}:")
+            traceback.print_exc()
             db.add(Account(id=acc_id, status="error", proxy="direct"))
         db.commit()
     db.close()
@@ -193,27 +207,6 @@ async def process_zip(zip_path: str):
 @app.get("/")
 def root():
     return FileResponse("index.html")
-
-@app.post("/proxies")
-async def upload_proxies(file: UploadFile = File(...)):
-    content = (await file.read()).decode("utf-8")
-    db = SessionDB()
-    added = 0
-    for line in content.splitlines():
-        p = parse_proxy(line)
-        if p:
-            db.add(Proxy(
-                raw=line.strip(),
-                addr=p["addr"],
-                port=p["port"],
-                username=p["username"],
-                password=p["password"],
-                proxy_type=p["proxy_type"],
-            ))
-            added += 1
-    db.commit()
-    db.close()
-    return {"status": "ok", "added": added}
 
 @app.post("/proxies-text")
 async def upload_proxies_text(data: ProxyList):
