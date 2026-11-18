@@ -139,28 +139,40 @@ def find_local_2fa(session_file_path: Path) -> str:
         pass
     return None
 
-def is_valid_telethon_session(session_path: Path) -> bool:
-    """Предварительная проверка структуры базы, чтобы исключить Pyrogram и битые файлы"""
+def normalize_session_sqlite(session_path: Path):
+    """Приводит структуру таблиц сессии к ожиданиям Telethon без потери ключей авторизации"""
     try:
         conn = sqlite3.connect(str(session_path))
         cursor = conn.cursor()
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-        tables = [row[0] for row in cursor.fetchall()]
+        cursor.execute("PRAGMA table_info(sessions);")
+        columns = [row[1] for row in cursor.fetchall()]
+        
+        if len(columns) > 5:
+            cursor.execute("SELECT * FROM sessions;")
+            rows = cursor.fetchall()
+            cursor.execute("DROP TABLE sessions;")
+            cursor.execute("""
+                CREATE TABLE sessions (
+                    dc_id integer primary key,
+                    server_address text,
+                    port integer,
+                    auth_key blob,
+                    takeout_id integer
+                )
+            """)
+            for row in rows:
+                new_row = row[:5]
+                cursor.execute("INSERT OR REPLACE INTO sessions VALUES (?, ?, ?, ?, ?)", new_row)
+            conn.commit()
         conn.close()
-        # У Telethon обязательно должны быть таблицы sessions или sent_files
-        if "sessions" not in tables:
-            return False
-        return True
-    except Exception:
-        return False
+    except Exception as e:
+        print(f"Normalization warning: {e}")
 
 async def validate_and_auth_session(session_path: Path, proxy_dict: dict, acc_id: str):
     try:
-        if not is_valid_telethon_session(session_path):
-            return {"status": "error", "error_msg": "Неверный формат сессии (возможно, Pyrogram или повреждена база)"}
+        normalize_session_sqlite(session_path)
 
         proxy_tuple = get_telethon_proxy_tuple(proxy_dict)
-        
         API_ID = 2040
         API_HASH = "b18441a1ff607e10a989891a5462e627"
 
@@ -178,7 +190,7 @@ async def validate_and_auth_session(session_path: Path, proxy_dict: dict, acc_id
             
             if not await client.is_user_authorized():
                 await client.disconnect()
-                return {"status": "invalid", "error_msg": "Сессия не авторизована (требуется 2FA или неверные ключи)"}
+                return {"status": "invalid", "error_msg": "Сессия не авторизована (требуется правильный 2FA)"}
         
         me = await client.get_me()
         avatar_url = None
@@ -202,7 +214,7 @@ async def validate_and_auth_session(session_path: Path, proxy_dict: dict, acc_id
             "error_msg": None
         }
     except Exception as e:
-        return {"status": "error", "error_msg": f"Ошибка инициализации: {str(e)}"}
+        return {"status": "error", "error_msg": f"Ошибка: {str(e)}"}
 
 async def process_zip_archive(zip_path: Path):
     extract_to = UPLOAD_DIR / uuid.uuid4().hex
@@ -249,7 +261,7 @@ async def process_zip_archive(zip_path: Path):
             ))
             db.commit()
         except Exception as inner_err:
-            print(f"Skipping file due to error: {inner_err}")
+            print(f"Skip file: {inner_err}")
     db.close()
     if zip_path.exists(): zip_path.unlink()
 
