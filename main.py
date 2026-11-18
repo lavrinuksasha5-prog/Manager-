@@ -1,4 +1,4 @@
-import os, uuid, zipfile, time, random, asyncio, sqlite3
+import os, uuid, zipfile, time, random, asyncio, sqlite3, socks
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -64,7 +64,7 @@ class Proxy(Base):
 
 Base.metadata.create_all(engine)
 
-# Автомиграция для избежания ошибки отсутствия колонки tdata_path
+# Автомиграция для колонки tdata_path
 try:
     conn = sqlite3.connect(str(db_file))
     cursor = conn.cursor()
@@ -144,7 +144,7 @@ async def validate_tdata_base(tdata_path: str, proxy_dict: dict, acc_id: str):
     try:
         tdesk = TDesktop(tdata_path)
         client = await tdesk.ToTelethon(str(temp_session), UseCurrentSession)
-        client._proxy = {'proxy_type': 'http', 'addr': proxy_dict['addr'], 'port': proxy_dict['port'], 'username': proxy_dict.get('username'), 'password': proxy_dict.get('password')}
+        client.proxy = (socks.HTTP, proxy_dict['addr'], proxy_dict['port'])
 
         net_info, ping_ms = await get_proxy_info(proxy_dict)
         await client.connect()
@@ -189,7 +189,9 @@ async def login_and_create_session(acc_id: str):
 
     tdata_path = acc.tdata_path
     proxy_parts = acc.proxy.split(":")
-    proxy_dict = {"addr": proxy_parts[0], "port": int(proxy_parts[1])}
+    proxy_addr = proxy_parts[0]
+    proxy_port = int(proxy_parts[1])
+    proxy_tuple = (socks.HTTP, proxy_addr, proxy_port)
 
     old_session_file = SESS_DIR / f"{acc_id}_old.session"
     if old_session_file.exists(): old_session_file.unlink()
@@ -197,7 +199,7 @@ async def login_and_create_session(acc_id: str):
     try:
         tdesk = TDesktop(tdata_path)
         old_client = await tdesk.ToTelethon(str(old_session_file), UseCurrentSession)
-        old_client._proxy = {'proxy_type': 'http', 'addr': proxy_dict['addr'], 'port': proxy_dict['port']}
+        old_client.proxy = proxy_tuple
         await old_client.connect()
 
         if not await old_client.is_user_authorized():
@@ -209,8 +211,8 @@ async def login_and_create_session(acc_id: str):
         if new_session_file.exists(): new_session_file.unlink()
 
         chosen_api, device_string = generate_random_device(acc_id)
-        new_client = TelegramClient(str(new_session_file), api_id=chosen_api.api_id, api_hash=chosen_api.api_hash)
-        new_client._proxy = old_client._proxy
+        new_client = TelegramClient(str(new_session_file), api_id=chosen_api.api_id, api_hash=chosen_api.api_hash, proxy=proxy_tuple)
+        
         new_client.device_model = chosen_api.device_model
         new_client.system_version = chosen_api.system_version
         new_client.app_version = chosen_api.app_version
