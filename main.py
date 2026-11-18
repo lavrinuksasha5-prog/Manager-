@@ -269,65 +269,79 @@ async def open_telegram_web(acc_id: str):
     except Exception as e:
         return f"<h3>Ошибка чтения сессии: {str(e)}</h3>"
 
-    return f"""
+    html_content = """
     <!DOCTYPE html>
     <html lang="ru">
     <head>
         <meta charset="UTF-8">
-        <title>Подключение к аккаунту {acc.first_name or ''}...</title>
+        <title>Подключение к аккаунту...</title>
         <style>
-            body {{ background: #0b0e14; color: #fff; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: sans-serif; flex-direction: column; gap: 15px; margin: 0; }}
-            .spinner {{ width: 45px; height: 45px; border: 4px solid #3b82f6; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; }}
-            @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
-            .box {{ background: #131823; padding: 30px; border-radius: 12px; border: 1px solid #1e2636; text-align: center; max-width: 400px; }}
-            p {{ color: #9ca3af; font-size: 14px; margin-top: 10px; }}
+            body { background: #0b0e14; color: #fff; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: sans-serif; flex-direction: column; gap: 15px; margin: 0; }
+            .spinner { width: 45px; height: 45px; border: 4px solid #3b82f6; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; }
+            @keyframes spin { to { transform: rotate(360deg); } }
+            .box { background: #131823; padding: 30px; border-radius: 12px; border: 1px solid #1e2636; text-align: center; max-width: 400px; }
+            p { color: #9ca3af; font-size: 14px; margin-top: 10px; }
         </style>
     </head>
     <body>
         <div class="box">
             <div class="spinner"></div>
             <h2>Инициализация сессии</h2>
-            <p>Прокси IP: <b>{acc.ip or 'N/A'}</b> ({acc.country or 'Неизвестно'})</p>
+            <p>Прокси IP: <b id="ip-lbl"></b></p>
         </div>
         <script>
-            const dcId = {dc_id};
-            const authKeyHex = "{auth_key}";
-            const userId = {acc.user_id};
+            const dcId = DC_ID_PLACEHOLDER;
+            const authKeyHex = "AUTH_KEY_PLACEHOLDER";
+            const userId = USER_ID_PLACEHOLDER;
+            
+            document.getElementById('ip-lbl').innerText = "IP_PLACEHOLDER";
 
-            function hexToBytes(hex) {{
+            function hexToBytes(hex) {
                 let bytes = new Uint8Array(hex.length / 2);
-                for (let i = 0; i < hex.length; i += 2) {{
+                for (let i = 0; i < hex.length; i += 2) {
                     bytes[i/2] = parseInt(hex.substr(i, 2), 16);
-                }}
+                }
                 return bytes;
-            }}
+            }
 
-            try {{
+            try {
                 const dbOpenReq = indexedDB.open('tt-data', 1);
-                dbOpenReq.onupgradeneeded = function(event) {{
+                dbOpenReq.onupgradeneeded = function(event) {
                     const db = event.target.result;
-                    if (!db.objectStoreNames.contains('local-storage')) {{
+                    if (!db.objectStoreNames.contains('local-storage')) {
                         db.createObjectStore('local-storage');
-                    }}
-                }};
-                dbOpenReq.onsuccess = function(event) {{
+                    }
+                };
+                dbOpenReq.onsuccess = function(event) {
                     const db = event.target.result;
                     const transaction = db.transaction(['local-storage'], 'readwrite');
                     const store = transaction.objectStore('local-storage');
                     
                     store.put(JSON.stringify(Array.from(hexToBytes(authKeyHex))), 'dc' + dcId + '_auth_key');
-                    store.put(JSON.stringify({{ dcID: dcId, id: userId }}), 'user_auth');
+                    store.put(JSON.stringify({ dcID: dcId, id: userId }), 'user_auth');
 
-                    transaction.oncomplete = function() {{
-                        setTimeout(() => {{
+                    transaction.oncomplete = function() {
+                        setTimeout(() => {
                             window.location.replace("https://web.telegram.org/k/#@PremiumBot");
-                        }}, 1000);
-                    }};
-                }};
-            } catch (e) {{
+                        }, 1000);
+                    };
+                };
+            } catch (e) {
                 document.body.innerHTML = "<div class='box'><h3>Ошибка инициализации:</h3><p>" + e.message + "</p></div>";
-            }}
+            }
         </script>
     </body>
     </html>
     """
+    
+    html_content = html_content.replace("DC_ID_PLACEHOLDER", str(dc_id))
+    html_content = html_content.replace("AUTH_KEY_PLACEHOLDER", auth_key)
+    html_content = html_content.replace("USER_ID_PLACEHOLDER", str(acc.user_id))
+    html_content = html_content.replace("IP_PLACEHOLDER", f"{acc.ip or 'N/A'} ({acc.country or 'Неизвестно'})")
+
+    return html_content
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
