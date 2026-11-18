@@ -1,9 +1,9 @@
-import os, uuid, zipfile, traceback, asyncio, time, random
+import os, uuid, zipfile, time, random
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, String, Integer, DateTime, Boolean
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -12,7 +12,6 @@ from opentele2.td import TDesktop
 from opentele2.api import API, UseCurrentSession
 import aiohttp
 from telethon import TelegramClient
-from playwright.async_api import async_playwright
 
 # --- Инициализация приложения ---
 app = FastAPI()
@@ -31,9 +30,6 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # --- БД ---
 db_file = DATA_DIR / "twks.db"
-if db_file.exists():
-    db_file.unlink()
-
 engine = create_engine(f"sqlite:///{db_file}")
 Base = declarative_base()
 SessionDB = sessionmaker(bind=engine)
@@ -71,15 +67,6 @@ Base.metadata.create_all(engine)
 
 class ProxyList(BaseModel):
     text: str
-
-class ProxyUpdate(BaseModel):
-    proxy_text: str
-
-class PaymentData(BaseModel):
-    card_number: str
-    exp_month: str
-    exp_year: str
-    cvv: str
 
 # --- Парсер прокси ---
 def parse_proxy(line: str):
@@ -120,10 +107,7 @@ async def get_proxy_info(proxy: dict):
         "IN": "Индия", "ID": "Индонезия", "VN": "Вьетнам", "AE": "ОАЭ",
     }
     
-    if proxy["username"] and proxy["password"]:
-        proxy_url = f"http://{proxy['username']}:{proxy['password']}@{proxy['addr']}:{proxy['port']}"
-    else:
-        proxy_url = f"http://{proxy['addr']}:{proxy['port']}"
+    proxy_url = f"http://{proxy['username']}:{proxy['password']}@{proxy['addr']}:{proxy['port']}" if proxy.get("username") else f"http://{proxy['addr']}:{proxy['port']}"
 
     start_time = time.time()
     try:
@@ -131,17 +115,11 @@ async def get_proxy_info(proxy: dict):
             async with session.get("http://ip-api.com/json/?fields=status,country,countryCode,query", proxy=proxy_url) as response:
                 data = await response.json()
                 ping = int((time.time() - start_time) * 1000)
-                
                 if data.get("status") == "success":
                     code = data.get("countryCode")
-                    return {
-                        "ip": data.get("query"),
-                        "country_code": code,
-                        "country": COUNTRY_RU.get(code, data.get("country"))
-                    }, ping
-    except Exception as e:
-        print(f"[WARN] Ошибка определения гео по прокси: {e}")
-    
+                    return {"ip": data.get("query"), "country_code": code, "country": COUNTRY_RU.get(code, data.get("country"))}, ping
+    except Exception:
+        pass
     return {"ip": "N/A", "country_code": "UN", "country": "Неизвестно"}, 0
 
 def generate_random_device(acc_id: str):
@@ -157,12 +135,7 @@ def extract_tdata(zip_path: str) -> list:
     out = UPLOAD_DIR / uuid.uuid4().hex
     out.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path) as zf: zf.extractall(out)
-    found = []
-    for path in out.rglob("*"):
-        if not path.is_dir(): continue
-        if (path / "key_datas").exists() or any(f.name.isupper() and len(f.name) == 16 for f in path.glob("*")):
-            found.append(str(path))
-    return found
+    return [p for p in out.rglob("*") if p.is_dir() and ((p / "key_datas").exists() or any(f.name.isupper() and len(f.name) == 16 for f in p.glob("*")))]
 
 async def validate(tdata_path: str, proxy_dict: dict, acc_id: str):
     tdesk = TDesktop(tdata_path)
@@ -170,28 +143,14 @@ async def validate(tdata_path: str, proxy_dict: dict, acc_id: str):
     if session_file.exists(): session_file.unlink()
 
     chosen_api, device_string = generate_random_device(acc_id)
-
-    client = await tdesk.ToTelethon(
-        str(session_file), 
-        UseCurrentSession,
-        api=chosen_api
-    )
-    
-    client._proxy = {
-        'proxy_type': 'http',
-        'addr': proxy_dict['addr'],
-        'port': proxy_dict['port'],
-        'username': proxy_dict['username'],
-        'password': proxy_dict['password']
-    }
+    client = await tdesk.ToTelethon(str(session_file), UseCurrentSession, api=chosen_api)
+    client._proxy = {'proxy_type': 'http', 'addr': proxy_dict['addr'], 'port': proxy_dict['port'], 'username': proxy_dict['username'], 'password': proxy_dict['password']}
 
     net_info, ping_ms = await get_proxy_info(proxy_dict)
-    
     await client.connect()
     try:
         if not await client.is_user_authorized():
             return {"status": "invalid", "error_msg": "Сессия не авторизована"}
-        
         me = await client.get_me()
         
         avatar_url = None
@@ -202,9 +161,8 @@ async def validate(tdata_path: str, proxy_dict: dict, acc_id: str):
 
         return {
             "status": "valid", "user_id": me.id, "username": me.username,
-            "first_name": me.first_name, "phone": me.phone,
-            "avatar_url": avatar_url, "device": device_string,
-            "country": net_info["country"], "country_code": net_info["country_code"],
+            "first_name": me.first_name, "phone": me.phone, "avatar_url": avatar_url,
+            "device": device_string, "country": net_info["country"], "country_code": net_info["country_code"],
             "proxy_country": net_info["country"], "ip": net_info["ip"], "ping": ping_ms,
             "premium": getattr(me, "premium", False), "error_msg": None
         }
@@ -218,7 +176,7 @@ async def process_zip(zip_path: str):
 
     for td in dirs:
         acc_id = str(uuid.uuid4())
-        proxy_obj, proxy_dict = pop_free_proxy(db)
+        _, proxy_dict = pop_free_proxy(db)
         if not proxy_dict:
             db.add(Account(id=acc_id, status="error", error_msg="Нет прокси"))
             db.commit(); continue
@@ -280,22 +238,18 @@ def delete_account(acc_id: str):
     db.commit(); db.close()
     return {"status": "deleted"}
 
-# --- Инициализация веб-сессии аккаунта через его персональный прокси ---
-@app.post("/buy-premium/{acc_id}")
-async def buy_premium(acc_id: str):
+# --- Генератор сессионного ключа для открытия WebK по аналогии с GramGPT ---
+@app.get("/tg/k/{acc_id}", response_class=HTMLResponse)
+async def open_telegram_web(acc_id: str):
     db = SessionDB()
     acc = db.query(Account).filter_by(id=acc_id).first()
-    if not acc: 
-        db.close()
-        return {"status": "error", "message": "Аккаунт не найден"}
-
-    proxy_addr = acc.proxy.split(":")[0] if acc.proxy and acc.proxy != "direct" else None
-    p_row = db.query(Proxy).filter(Proxy.addr == proxy_addr).first() if proxy_addr else db.query(Proxy).order_by(Proxy.id.desc()).first()
     db.close()
+    if not acc:
+        return "<h3>Аккаунт не найден</h3>"
 
     session_file = SESS_DIR / f"{acc_id}.session"
-    if not session_file.exists(): 
-        return {"status": "error", "message": "Файл сессии не найден"}
+    if not session_file.exists():
+        return "<h3>Файл сессии не найден</h3>"
 
     try:
         client = TelegramClient(str(session_file), 2040, "b18441a1ff607e10a989891a5462e627")
@@ -304,24 +258,49 @@ async def buy_premium(acc_id: str):
         dc_id = client.session.dc_id
         await client.disconnect()
     except Exception as e:
-        return {"status": "error", "message": f"Ошибка сессии: {str(e)}"}
+        return f"<h3>Ошибка чтения сессии: {str(e)}</h3>"
 
-    proxy_conf = None
-    if p_row:
-        if p_row.username and p_row.password:
-            proxy_conf = {"server": f"http://{p_row.addr}:{p_row.port}", "username": p_row.username, "password": p_row.password}
-        else:
-            proxy_conf = {"server": f"http://{p_row.addr}:{p_row.port}"}
+    # Отдаем мини-страницу, которая внедряет ключи авторизации в localStorage WebK и редиректит в бота
+    return f"""
+    <!DOCTYPE html>
+    <html lang="ru">
+    <head>
+        <meta charset="UTF-8">
+        <title>Авторизация сессии...</title>
+        <style>
+            body {{ background: #0b0e14; color: #fff; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: sans-serif; flex-direction: column; gap: 15px; }}
+            .spinner {{ width: 40px; height: 40px; border: 4px solid #3b82f6; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; }}
+            @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+        </style>
+    </head>
+    <body>
+        <div class="spinner"></div>
+        <h2>Вход в аккаунт {acc.first_name or ''} через прокси...</h2>
+        <script>
+            const dcId = {dc_id};
+            const authKeyHex = "{auth_key}";
+            
+            // Конвертируем hex auth_key в ByteArray для WebK localStorage
+            function hexToBytes(hex) {{
+                let bytes = new Uint8Array(hex.length / 2);
+                for (let i = 0; i < hex.length; i += 2) {{
+                    bytes[i/2] = parseInt(hex.substr(i, 2), 16);
+                }}
+                return bytes;
+            }}
 
-    # Генерируем персональную ссылку или скриншот-статус для входа
-    return {
-        "status": "ok", 
-        "message": "Сессия готова к оплате через личный прокси",
-        "proxy_ip": acc.ip,
-        "web_login_data": {
-            "dc_id": dc_id,
-            "auth_key": auth_key,
-            "user_id": acc.user_id,
-            "proxy": acc.proxy
-        }
-    }
+            try {{
+                localStorage.setItem('dc' + dcId + '_auth_key', JSON.stringify(Array.from(hexToBytes(authKeyHex))));
+                localStorage.setItem('user_auth', JSON.stringify({{ dcID: dcId, id: {acc.user_id} }}));
+                
+                // Перенаправляем сразу в официальный WebK Telegram в чат с PremiumBot
+                setTimeout(() => {{
+                    window.location.href = "https://web.telegram.org/k/#@PremiumBot";
+                }}, 1000);
+            }} catch (e) {{
+                document.body.innerHTML = "<h3>Ошибка инициализации сессии: " + e.message + "</h3>";
+            }}
+        </script>
+    </body>
+    </html>
+    """
