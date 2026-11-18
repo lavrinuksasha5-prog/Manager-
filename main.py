@@ -1,4 +1,4 @@
-import os, uuid, time, aiohttp, zipfile, shutil, sqlite3, socks, json
+import os, uuid, time, aiohttp, zipfile, shutil, sqlite3, socks, json, base64
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, String, Integer, DateTime, Boolean, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
-from telethon import TelegramClient
+from telethon import TelegramClient, functions
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -59,12 +59,11 @@ class Proxy(Base):
 
 Base.metadata.create_all(engine)
 
-# Автомиграция колонок для существующих баз на томе
 with engine.begin() as conn:
     try:
         conn.execute(text("ALTER TABLE sessions_accounts ADD COLUMN is_active_web BOOLEAN DEFAULT 0;"))
     except Exception:
-        pass # Колонка уже существует
+        pass
 
 class ProxyList(BaseModel):
     text: str
@@ -100,6 +99,16 @@ def parse_proxy(line: str):
     port = ''.join(filter(str.isdigit, port))
     if not host or not port: return None
     return {"proxy_type": proxy_type, "addr": host, "port": int(port), "username": user, "password": passw}
+
+def get_db_proxy(proxy_str: str):
+    if not proxy_str or ":" not in proxy_str: return None
+    host, port = proxy_str.split(":", 1)
+    db = SessionDB()
+    p = db.query(Proxy).filter_by(addr=host, port=int(port)).first()
+    db.close()
+    if p:
+        return {"proxy_type": p.proxy_type, "addr": p.addr, "port": p.port, "username": p.username, "password": p.password}
+    return {"proxy_type": "http", "addr": host, "port": int(port), "username": None, "password": None}
 
 def pop_free_proxy(db):
     p = db.query(Proxy).order_by(Proxy.id.desc()).first()
@@ -188,7 +197,7 @@ async def validate_and_auth_session(session_path: Path, proxy_dict: dict, acc_id
             
             if not await client.is_user_authorized():
                 await client.disconnect()
-                return {"status": "invalid", "error_msg": "Сессия не авторизована (проверь 2FA пароль)"}
+                return {"status": "invalid", "error_msg": "Сессия не авторизована (проверь 2FA)"}
         
         me = await client.get_me()
         avatar_url = None
@@ -240,7 +249,7 @@ async def process_zip_archive(zip_path: Path):
 
             _, proxy_dict = pop_free_proxy(db)
             if not proxy_dict:
-                db.add(Account(id=acc_id, status="error", error_msg="Нет свободных прокси в базе"))
+                db.add(Account(id=acc_id, status="error", error_msg="Нет свободных прокси"))
                 db.commit()
                 continue
 
@@ -263,7 +272,7 @@ async def process_zip_archive(zip_path: Path):
             ))
             db.commit()
         except Exception as inner_err:
-            print(f"Skip file error: {inner_err}")
+            print(f"Skip error: {inner_err}")
     db.close()
     if zip_path.exists(): zip_path.unlink()
 
@@ -320,10 +329,38 @@ async def open_web_session(acc_id: str):
         db.close()
         return JSONResponse({"error": "Аккаунт не найден"}, status_code=404)
     
-    acc.is_active_web = True
-    db.commit()
-    db.close()
-    return {"status": "success", "message": "Сеанс успешно инициализирован и открыт под прокси с маскировкой."}
+    session_path = SESS_DIR / f"{acc_id}.session"
+    if not session_path.exists():
+        db.close()
+        return JSONResponse({"error": "Файл сессии не найден"}, status_code=404)
+
+    proxy_dict = get_db_proxy(acc.proxy)
+    proxy_tuple = get_telethon_proxy_tuple(proxy_dict) if proxy_dict else None
+    
+    API_ID = 2040
+    API_HASH = "b18441a1ff607e10a989891a5462e627"
+
+    try:
+        client = TelegramClient(str(session_path), api_id=API_ID, api_hash=API_HASH, proxy=proxy_tuple)
+        await client.connect()
+        
+        # Экспортируем официальный логин-токен для мгновенного входа в Web версию
+        tok = await client(functions.auth.ExportLoginTokenRequest(api_id=API_ID, api_hash=API_HASH, except_ids=[]))
+        await client.disconnect()
+        
+        if hasattr(tok, 'token'):
+            token_b64 = base64.urlsafe_b64encode(tok.token).decode('utf-8').rstrip('=')
+            web_url = f"https://web.telegram.org/k/#auth={token_b64}"
+        else:
+            web_url = "https://web.telegram.org/k/"
+
+        acc.is_active_web = True
+        db.commit()
+        db.close()
+        return {"status": "success", "url": web_url}
+    except Exception as e:
+        db.close()
+        return JSONResponse({"error": f"Ошибка генерации веб-сеанса: {str(e)}"}, status_code=500)
 
 @app.post("/auth/close/{acc_id}")
 async def close_web_session(acc_id: str):
@@ -336,7 +373,7 @@ async def close_web_session(acc_id: str):
     acc.is_active_web = False
     db.commit()
     db.close()
-    return {"status": "success", "message": "Сеанс успешно закрыт и сохранен в безопасности."}
+    return {"status": "success", "message": "Сеанс успешно закрыт."}
 
 @app.get("/download/{acc_id}")
 def download_session(acc_id: str):
