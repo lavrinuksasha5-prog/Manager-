@@ -1,4 +1,4 @@
-import os, uuid, time, aiohttp, zipfile, sqlite3
+import os, uuid, time, aiohttp, zipfile, shutil, sqlite3
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,7 +9,6 @@ from sqlalchemy import create_engine, Column, String, Integer, DateTime, Boolean
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 from telethon import TelegramClient
-from telethon.errors import SessionPasswordNeededError
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -132,7 +131,6 @@ async def validate_and_auth_session(session_path: Path, proxy_dict: dict, acc_id
     try:
         await client.connect()
         if not await client.is_user_authorized():
-            # Пробуем авторизовать через найденный 2FA файл в папке, если сессия заблокирована паролем
             password = find_local_2fa(session_path)
             if password:
                 try:
@@ -175,14 +173,15 @@ async def process_zip_archive(zip_path: Path):
     with zipfile.ZipFile(zip_path, 'r') as zf:
         zf.extractall(extract_to)
     
-    # Ищем все .session файлы во всех вложенных папках архива
     session_files = list(extract_to.rglob("*.session"))
     db = SessionDB()
 
     for sf in session_files:
         acc_id = uuid.uuid4().hex
         session_dest = SESS_DIR / f"{acc_id}.session"
-        sf.rename(session_dest)
+        
+        # Безопасное копирование между разными томами (исправление ошибку Errno 18)
+        shutil.copy(str(sf), str(session_dest))
 
         _, proxy_dict = pop_free_proxy(db)
         if not proxy_dict:
