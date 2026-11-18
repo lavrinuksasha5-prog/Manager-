@@ -54,10 +54,10 @@
             </div>
             
             <div class="card">
-                <h2>2. Загрузка файла сессии (.session)</h2>
+                <h2>2. Загрузка архива с сессиями (.zip)</h2>
                 <label class="file-upload">
-                    <span id="uploadText" style="font-size: 13px; color: var(--text-muted);">📁 Выбрать файл .session</span>
-                    <input type="file" id="sessionFile" accept=".session" onchange="uploadSession()">
+                    <span id="uploadText" style="font-size: 13px; color: var(--text-muted);">📁 Выбрать ZIP архив с папками аккаунтов</span>
+                    <input type="file" id="sessionFile" accept=".zip" onchange="uploadSession()">
                 </label>
             </div>
         </div>
@@ -137,12 +137,12 @@
             if (!fileInput.files[0]) return;
             const formData = new FormData();
             formData.append('file', fileInput.files[0]);
-            document.getElementById('uploadText').innerText = '⏳ Проверка сессии...';
+            document.getElementById('uploadText').innerText = '⏳ Распаковка и проверка сессий...';
             
             await fetch('/upload-session', { method: 'POST', body: formData });
-            alert('Файл принят! Сессия проверяется через прокси.');
-            setTimeout(loadAccounts, 3000);
-            document.getElementById('uploadText').innerText = '📁 Выбрать файл .session';
+            alert('ZIP архив принят! Сессии из папок проверяются в фоне.');
+            setTimeout(loadAccounts, 4000);
+            document.getElementById('uploadText').innerText = '📁 Выбрать ZIP архив с папками аккаунтов';
             fileInput.value = '';
         }
 
