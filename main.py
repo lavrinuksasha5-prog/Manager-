@@ -130,6 +130,7 @@ async def get_proxy_info(proxy: dict):
     return {"ip": "N/A", "country": "Неизвестно"}, 0
 
 def get_telethon_proxy_tuple(proxy_dict: dict):
+    if not proxy_dict: return None
     s_type = socks.SOCKS5 if proxy_dict.get('proxy_type') == 'socks5' else socks.HTTP
     addr = proxy_dict['addr']
     port = int(proxy_dict['port'])
@@ -182,7 +183,7 @@ async def validate_and_auth_session(session_path: Path, proxy_dict: dict, acc_id
         API_ID = 2040
         API_HASH = "b18441a1ff607e10a989891a5462e627"
 
-        client = TelegramClient(str(session_path), api_id=API_ID, api_hash=API_HASH, proxy=proxy_tuple)
+        client = TelegramClient(str(session_path), api_id=API_ID, api_hash=API_HASH, proxy=proxy_tuple, connection_retries=2, timeout=5)
         net_info, ping_ms = await get_proxy_info(proxy_dict)
         
         await client.connect()
@@ -341,10 +342,10 @@ async def open_web_session(acc_id: str):
     API_HASH = "b18441a1ff607e10a989891a5462e627"
 
     try:
-        client = TelegramClient(str(session_path), api_id=API_ID, api_hash=API_HASH, proxy=proxy_tuple)
+        # Устанавливаем быстрые таймауты, чтобы клиент не висел
+        client = TelegramClient(str(session_path), api_id=API_ID, api_hash=API_HASH, proxy=proxy_tuple, connection_retries=2, timeout=5)
         await client.connect()
         
-        # Экспортируем официальный логин-токен для мгновенного входа в Web версию
         tok = await client(functions.auth.ExportLoginTokenRequest(api_id=API_ID, api_hash=API_HASH, except_ids=[]))
         await client.disconnect()
         
@@ -360,7 +361,7 @@ async def open_web_session(acc_id: str):
         return {"status": "success", "url": web_url}
     except Exception as e:
         db.close()
-        return JSONResponse({"error": f"Ошибка генерации веб-сеанса: {str(e)}"}, status_code=500)
+        return JSONResponse({"error": f"Ошибка соединения с прокси/Telegram: {str(e)}"}, status_code=500)
 
 @app.post("/auth/close/{acc_id}")
 async def close_web_session(acc_id: str):
