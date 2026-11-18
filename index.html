@@ -20,24 +20,22 @@
         body { background-color: var(--bg-color); color: var(--text-main); padding: 12px; }
         .container { width: 100%; max-width: 1400px; margin: 0 auto; }
         
-        h1 { font-size: 18px; margin-bottom: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; line-height: 1.3; }
+        h1 { font-size: 18px; margin-bottom: 12px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
         
-        /* Мобильный Grid: в столбец на экранах телефонов */
         .grid { display: flex; flex-direction: column; gap: 12px; margin-bottom: 15px; }
         
         .card { background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 15px; }
-        .card h2 { font-size: 14px; margin-bottom: 10px; color: var(--text-muted); font-weight: 500; }
+        .card h2 { font-size: 14px; margin-bottom: 8px; color: var(--text-muted); font-weight: 500; }
         
-        textarea { width: 100%; height: 90px; background: #080b10; border: 1px solid var(--border-color); border-radius: 8px; color: #fff; padding: 10px; resize: none; font-size: 13px; margin-bottom: 10px; }
+        textarea { width: 100%; height: 80px; background: #080b10; border: 1px solid var(--border-color); border-radius: 8px; color: #fff; padding: 10px; resize: none; font-size: 13px; margin-bottom: 8px; }
         
         input[type="file"] { display: none; }
-        .file-upload { border: 2px dashed var(--border-color); border-radius: 8px; padding: 20px 10px; text-align: center; cursor: pointer; transition: 0.2s; background: #080b10; display: block; }
+        .file-upload { border: 2px dashed var(--border-color); border-radius: 8px; padding: 15px; text-align: center; cursor: pointer; transition: 0.2s; background: #080b10; display: block; margin-bottom: 8px; }
         .file-upload:hover { border-color: var(--accent); }
         
-        button { background: var(--accent); color: #fff; border: none; padding: 10px 16px; border-radius: 8px; font-weight: 500; cursor: pointer; transition: 0.2s; width: 100%; font-size: 14px; }
+        button { background: var(--accent); color: #fff; border: none; padding: 12px; border-radius: 8px; font-weight: 500; cursor: pointer; transition: 0.2s; width: 100%; font-size: 14px; }
         button:hover { background: var(--accent-hover); }
 
-        /* Адаптивная таблица / карточки для мобильных */
         .table-container { background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 12px; overflow-x: auto; margin-top: 10px; -webkit-overflow-scrolling: touch; }
         table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; min-width: 650px; }
         th, td { padding: 10px 12px; border-bottom: 1px solid var(--border-color); white-space: nowrap; }
@@ -58,19 +56,21 @@
 </head>
 <body>
     <div class="container">
-        <h1>TWKS Panel — Сессии & Безопасность</h1>
+        <h1>TWKS Panel — Параллельные сессии</h1>
         
         <div class="grid">
+            <!-- Загрузка прокси -->
             <div class="card">
-                <h2>Загрузка прокси (ip:port:user:pass)</h2>
-                <textarea id="proxyInput" placeholder="Вставьте прокси по одному на строку..."></textarea>
-                <button onclick="uploadProxies()">Загрузить прокси</button>
+                <h2>1. Загрузка прокси (ip:port:user:pass или ip:port)</h2>
+                <textarea id="proxyInput" placeholder="Вставляй прокси сюда (каждый с новой строки)..."></textarea>
+                <button onclick="uploadProxies()">Загрузить прокси в базу</button>
             </div>
             
+            <!-- Загрузка ZIP с tdata -->
             <div class="card">
-                <h2>Загрузка архива с tdata (ZIP)</h2>
+                <h2>2. Загрузка архива tdata (ZIP)</h2>
                 <label class="file-upload" id="dropZone">
-                    <span id="uploadText" style="font-size: 13px; color: var(--text-muted);">📁 Выберите или перетащите ZIP с tdata</span>
+                    <span id="uploadText" style="font-size: 13px; color: var(--text-muted);">📁 Нажми, чтобы выбрать ZIP с tdata</span>
                     <input type="file" id="zipFile" accept=".zip" onchange="uploadZip()">
                 </label>
             </div>
@@ -81,7 +81,7 @@
                 <thead>
                     <tr>
                         <th>Аватар</th>
-                        <th>Телефон / User ID</th>
+                        <th>Телефон / ID</th>
                         <th>Имя / Username</th>
                         <th>Устройство</th>
                         <th>Прокси / IP</th>
@@ -107,7 +107,7 @@
                 const tbody = document.getElementById('accountsTable');
                 
                 if (data.length === 0) {
-                    tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; color: var(--text-muted);">Нет добавленных аккаунтов</td></tr>`;
+                    tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; color: var(--text-muted);">Аккаунты пока не добавлены</td></tr>`;
                     return;
                 }
 
@@ -139,15 +139,20 @@
 
         async function uploadProxies() {
             const text = document.getElementById('proxyInput').value;
-            if (!text.trim()) return alert('Введите прокси!');
-            const res = await fetch('/proxies-text', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({text})
-            });
-            const data = await res.json();
-            alert(`Успешно добавлено прокси: ${data.added}`);
-            document.getElementById('proxyInput').value = '';
+            if (!text.trim()) return alert('Поле прокси пустое!');
+            
+            try {
+                const res = await fetch('/proxies-text', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({text})
+                });
+                const data = await res.json();
+                alert(`Успешно добавлено прокси: ${data.added}`);
+                document.getElementById('proxyInput').value = '';
+            } catch (err) {
+                alert('Ошибка отправки прокси: ' + err.message);
+            }
         }
 
         async function uploadZip() {
@@ -157,22 +162,32 @@
             const formData = new FormData();
             formData.append('file', fileInput.files[0]);
             
-            document.getElementById('uploadTextinnerText = '⏳ Создание параллельных сессий...';
+            const uploadText = document.getElementById('uploadText');
+            uploadText.innerText = '⏳ Загрузка и создание сессий...';
             
-            await fetch('/upload', { method: 'POST', body: formData });
-            alert('Архив принят! Сессии создаются в фоне. Обновите страницу через минуту.');
-            document.getElementById('uploadText').innerText = '📁 Выберите или перетащите ZIP с tdata';
-            fileInput.value = '';
-            setTimeout(loadAccounts, 3000);
+            try {
+                const res = await fetch('/upload', { method: 'POST', body: formData });
+                if (res.ok) {
+                    alert('ZIP-архив успешно принят! Сессии создаются в фоновом режиме. Обновим таблицу через пару секунд.');
+                    setTimeout(loadAccounts, 4000);
+                } else {
+                    alert('Ошибка при загрузке архива на сервер.');
+                }
+            } catch (err) {
+                alert('Ошибка соединения: ' + err.message);
+            } finally {
+                uploadText.innerText = '📁 Нажми, чтобы выбрать ZIP с tdata';
+                fileInput.value = '';
+            }
         }
 
         async function deleteAccount(id) {
-            if (!confirm('Удалить аккаунт и файл сессии?')) return;
+            if (!confirm('Точно удалить этот аккаунт и его сессию?')) return;
             await fetch(`/accounts/${id}`, { method: 'DELETE' });
             loadAccounts();
         }
 
-        setInterval(loadAccounts, 5000);
+        setInterval(loadAccounts, 6000);
         loadAccounts();
     </script>
 </body>
