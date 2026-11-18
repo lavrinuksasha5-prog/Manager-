@@ -64,7 +64,6 @@ class Proxy(Base):
 
 Base.metadata.create_all(engine)
 
-# Автомиграция для колонки tdata_path
 try:
     conn = sqlite3.connect(str(db_file))
     cursor = conn.cursor()
@@ -125,13 +124,6 @@ async def get_proxy_info(proxy: dict):
         pass
     return {"ip": "N/A", "country_code": "UN", "country": "Неизвестно"}, 0
 
-def generate_random_device(acc_id: str):
-    devices = [
-        {"api": API.TelegramAndroid.Generate(unique_id=acc_id), "device_str": "Android 13.0 (Mobile)"},
-        {"api": API.TelegramIOS.Generate(unique_id=acc_id), "device_str": "iOS 17.2 (Mobile)"},
-    ]
-    return random.choice(devices)
-
 def extract_tdata(zip_path: str) -> list:
     out = UPLOAD_DIR / uuid.uuid4().hex
     out.mkdir(parents=True, exist_ok=True)
@@ -144,7 +136,8 @@ async def validate_tdata_base(tdata_path: str, proxy_dict: dict, acc_id: str):
     try:
         tdesk = TDesktop(tdata_path)
         client = await tdesk.ToTelethon(str(temp_session), UseCurrentSession)
-        client.proxy = (socks.HTTP, proxy_dict['addr'], proxy_dict['port'])
+        p_tuple = (socks.HTTP, proxy_dict['addr'], proxy_dict['port'], True, proxy_dict.get('username'), proxy_dict.get('password')) if proxy_dict.get('username') else (socks.HTTP, proxy_dict['addr'], proxy_dict['port'])
+        client.proxy = p_tuple
 
         net_info, ping_ms = await get_proxy_info(proxy_dict)
         await client.connect()
@@ -159,6 +152,7 @@ async def validate_tdata_base(tdata_path: str, proxy_dict: dict, acc_id: str):
             await client.download_profile_photo(me, file=str(avatar_path))
             avatar_url = f"/static/avatar_{acc_id}.jpg"
 
+        await client.disconnect()
         return {
             "status": "valid",
             "user_id": me.id,
@@ -179,6 +173,33 @@ async def validate_tdata_base(tdata_path: str, proxy_dict: dict, acc_id: str):
     finally:
         if temp_session.exists(): temp_session.unlink()
 
+def find_2fa_password(tdata_path: str) -> str:
+    """Автоматически ищет 2FA пароль в папках и файлах tdata (поддерживает 2fa, 2FA, файлы с паролями)"""
+    try:
+        base_path = Path(tdata_path)
+        # Ищем файлы или папки с именами содержащими 2fa / 2FA / пароль
+        for path in base_path.rglob("*"):
+            name_lower = path.name.lower()
+            if "2fa" in name_lower or "pass" in name_lower or "password" in name_lower:
+                if path.is_file():
+                    try:
+                        content = path.read_text(encoding="utf-8", errors="ignore").strip()
+                        if content and len(content) < 100:
+                            return content
+                    except Exception:
+                        pass
+                elif path.is_dir():
+                    for sub_file in path.glob("*"):
+                        try:
+                            content = sub_file.read_text(encoding="utf-8", errors="ignore").strip()
+                            if content and len(content) < 100:
+                                return content
+                        except Exception:
+                            pass
+    except Exception:
+        pass
+    return None
+
 @app.post("/login/{acc_id}")
 async def login_and_create_session(acc_id: str):
     db = SessionDB()
@@ -188,13 +209,19 @@ async def login_and_create_session(acc_id: str):
         return JSONResponse({"error": "Аккаунт или tdata не найдены"}, status_code=404)
 
     tdata_path = acc.tdata_path
-    proxy_parts = acc.proxy.split(":")
-    proxy_addr = proxy_parts[0]
-    proxy_port = int(proxy_parts[1])
-    proxy_tuple = (socks.HTTP, proxy_addr, proxy_port)
+    p_parts = acc.proxy.split(":")
+    proxy_addr = p_parts[0]
+    proxy_port = int(p_parts[1])
+    
+    if len(p_parts) >= 4:
+        proxy_tuple = (socks.HTTP, proxy_addr, proxy_port, True, p_parts[2], p_parts[3])
+    else:
+        proxy_tuple = (socks.HTTP, proxy_addr, proxy_port)
 
     old_session_file = SESS_DIR / f"{acc_id}_old.session"
-    if old_session_file.exists(): old_session_file.unlink()
+    new_session_file = SESS_DIR / f"{acc_id}.session"
+    for sf in [old_session_file, new_session_file]:
+        if sf.exists(): sf.unlink()
 
     try:
         tdesk = TDesktop(tdata_path)
@@ -207,12 +234,8 @@ async def login_and_create_session(acc_id: str):
             return JSONResponse({"error": "Базовая сессия слетела"}, status_code=400)
 
         phone = acc.phone
-        new_session_file = SESS_DIR / f"{acc_id}.session"
-        if new_session_file.exists(): new_session_file.unlink()
-
-        chosen_api, device_string = generate_random_device(acc_id)
+        chosen_api = API.TelegramAndroid.Generate(unique_id=acc_id)
         new_client = TelegramClient(str(new_session_file), api_id=chosen_api.api_id, api_hash=chosen_api.api_hash, proxy=proxy_tuple)
-        
         new_client.device_model = chosen_api.device_model
         new_client.system_version = chosen_api.system_version
         new_client.app_version = chosen_api.app_version
@@ -236,19 +259,26 @@ async def login_and_create_session(acc_id: str):
 
         if not code:
             await old_client.disconnect()
+            await new_client.disconnect()
             db.close()
-            return JSONResponse({"error": "Таймаут: код авторизации не поступил в чат 777000"}, status_code=400)
+            return JSONResponse({"error": "Таймаут: код из 777000 не пришел"}, status_code=400)
 
-        await asyncio.sleep(random.uniform(1.5, 3.0))
+        await asyncio.sleep(random.uniform(1.0, 2.0))
+        
         try:
             await new_client.sign_in(phone=phone, code=code, phone_code_hash=sent_code.phone_code_hash)
         except SessionPasswordNeededError:
-            await old_client.disconnect()
-            await new_client.disconnect()
-            db.close()
-            return JSONResponse({"error": "Требуется 2FA пароль (облачный пароль)"}, status_code=400)
+            # Автоматически ищем 2FA пароль в папках и файлах tdata (2fa / 2FA)
+            password = find_2fa_password(tdata_path)
+            if not password:
+                await old_client.disconnect()
+                await new_client.disconnect()
+                db.close()
+                return JSONResponse({"error": "Требуется 2FA пароль, но файл/папка 2FA не найдены в tdata"}, status_code=400)
+            
+            await new_client.sign_in(password=password)
 
-        acc.device = device_string
+        acc.device = "Android 13.0 (Auth)"
         db.commit()
         db.close()
 
@@ -256,7 +286,7 @@ async def login_and_create_session(acc_id: str):
         await new_client.disconnect()
         if old_session_file.exists(): old_session_file.unlink()
 
-        return {"status": "success", "message": "Новая параллельная сессия успешно создана!"}
+        return {"status": "success", "message": "Новая авторизация успешно пройдена!"}
     except Exception as e:
         db.close()
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -365,7 +395,7 @@ def list_accounts():
 def download_session(acc_id: str):
     session_file = SESS_DIR / f"{acc_id}.session"
     if not session_file.exists():
-        return JSONResponse({"error": "Файл сессии еще не создан. Нажми '🚀 Войти'"}, status_code=404)
+        return JSONResponse({"error": "Файл сессии еще не создан"}, status_code=404)
     return FileResponse(path=str(session_file), filename=f"{acc_id}.session", media_type='application/octet-stream')
 
 @app.delete("/accounts/{acc_id}")
