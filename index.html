@@ -32,8 +32,8 @@
         table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; min-width: 750px; }
         th, td { padding: 10px 12px; border-bottom: 1px solid var(--border-color); white-space: nowrap; }
         th { background: #0f1520; color: var(--text-muted); font-weight: 500; }
-        .badge { padding: 3px 6px; border-radius: 6px; font-size: 10px; font-weight: 500; display: inline-block; }
-        .badge-valid { background: rgba(34,197,94,0.1); color: var(--success); }
+        .badge { padding: 3px 6px; border-radius: 6px; font-size: 10px; font-weight: 500; display: inline-block; cursor: pointer; }
+        .badge-valid { background: rgba(34,197,94,0.1); color: var(--success); cursor: default; }
         .badge-error { background: rgba(239,68,68,0.1); color: var(--danger); }
         .badge-prem { background: rgba(234,179,8,0.1); color: #eab308; }
         .actions { display: flex; gap: 6px; align-items: center; }
@@ -95,16 +95,18 @@
                     return;
                 }
 
-                tbody.innerHTML = data.map(acc => `
+                tbody.innerHTML = data.map(acc => {
+                    const safeError = (acc.error_msg || 'Неизвестная ошибка').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                    return `
                     <tr>
                         <td>${acc.avatar_url ? `<img src="${acc.avatar_url}" class="avatar">` : '👤'}</td>
                         <td><strong>${acc.phone || 'N/A'}</strong><br><span style="color:var(--text-muted);font-size:10px">${acc.user_id || ''}</span></td>
                         <td>${acc.first_name || ''}<br><span style="color:var(--text-muted);font-size:10px">@${acc.username || 'none'}</span></td>
-                        <td>${acc.proxy || 'N/A'}<br><span style="color:var(--text-muted);font-size:10px">${acc.ip || ''} (${acc.country || ''})</span></td>
+                        <td>${acc.proxy || 'N/A'}<br><span style="color:var(--text-muted);font-size:10px">${acc.ip || ''}</span></td>
                         <td>${acc.ping} ms</td>
                         <td>${acc.premium ? '<span class="badge badge-prem">⭐ Премиум</span>' : 'Нет'}</td>
                         <td>
-                            ${acc.status === 'valid' ? '<span class="badge badge-valid">Активна</span>' : `<span class="badge badge-error" onclick="alert('${acc.error_msg || ''}')">Ошибка 🔍</span>`}
+                            ${acc.status === 'valid' ? '<span class="badge badge-valid">Активна</span>' : `<span class="badge badge-error" onclick="alert('${safeError}')">Ошибка 🔍</span>`}
                         </td>
                         <td>
                             <div class="actions">
@@ -113,7 +115,7 @@
                             </div>
                         </td>
                     </tr>
-                `).join('');
+                `;}).join('');
             } catch (err) { console.error(err); }
         }
 
