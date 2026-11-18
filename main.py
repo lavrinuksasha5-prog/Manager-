@@ -343,7 +343,7 @@ async def open_web(acc_id: str):
             browser = await p.chromium.launch(headless=True)
             
             context_args = {
-                "viewport": {"width": 1280, "height": 900}, # <-- Полноценный десктопный размер окна
+                "viewport": {"width": 1280, "height": 900},
                 "locale": geo["locale"],
                 "timezone_id": geo["timezone"],
                 "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
@@ -354,17 +354,25 @@ async def open_web(acc_id: str):
             context = await browser.new_context(**context_args)
             page = await context.new_page()
             
+            # Скрываем автоматизацию от антифрода
             await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
 
-            await page.goto("https://web.telegram.org/k/", wait_until="domcontentloaded", timeout=60000)
+            # 1. Сначала открываем пустую страницу домена, чтобы зафиксировать localStorage
+            await page.goto("https://web.telegram.org/k/", wait_until="commit", timeout=60000)
+            
+            # 2. Инъецируем ключи авторизации напрямую в хранилище
             await page.evaluate(f"""
                 localStorage.setItem('dc{dc_id}_auth_key', '{auth_key}');
                 localStorage.setItem('user_auth', JSON.stringify({{ dcID: {dc_id}, id: '{acc.user_id}' }}));
             """)
-            await page.reload(wait_until="domcontentloaded", timeout=60000)
-            await asyncio.sleep(4)
             
-            await page.screenshot(path=str(screenshot_path), full_page=True)
+            # 3. Перезагружаем для инициализации клиента с уже готовыми ключами
+            await page.reload(wait_until="domcontentloaded", timeout=60000)
+            
+            # 4. Даем время на стабильную прорисовку чатов через прокси
+            await asyncio.sleep(5)
+            
+            await page.screenshot(path=str(screenshot_path), full_page=False)
             await browser.close()
             return {"status": "ok", "screenshot": f"/static/web_{acc_id}.png"}
     except Exception as e:
