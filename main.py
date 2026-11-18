@@ -133,9 +133,8 @@ def extract_tdata(zip_path: str) -> list:
     with zipfile.ZipFile(zip_path) as zf: zf.extractall(out)
     return [p for p in out.rglob("*") if p.is_dir() and ((p / "key_datas").exists() or any(f.name.isupper() and len(f.name) == 16 for f in p.glob("*")))]
 
-# --- Новая логика: создание параллельной сессии через перехват кода ---
+# --- Логика создания параллельной сессии через перехват кода ---
 async def create_new_session_from_tdata(tdata_path: str, proxy_dict: dict, acc_id: str):
-    # 1. Подключаемся к исходной tdata как старая сессия для чтения служебных сообщений
     old_session_file = SESS_DIR / f"{acc_id}_old.session"
     if old_session_file.exists(): old_session_file.unlink()
 
@@ -153,7 +152,6 @@ async def create_new_session_from_tdata(tdata_path: str, proxy_dict: dict, acc_i
         me = await old_client.get_me()
         phone = me.phone
 
-        # 2. Создаем абсолютно новую параллельную сессию с уникальным девайсом (Пункт 1)
         new_session_file = SESS_DIR / f"{acc_id}.session"
         if new_session_file.exists(): new_session_file.unlink()
 
@@ -161,27 +159,23 @@ async def create_new_session_from_tdata(tdata_path: str, proxy_dict: dict, acc_i
         new_client = TelegramClient(str(new_session_file), api_id=chosen_api.api_id, api_hash=chosen_api.api_hash)
         new_client._proxy = old_client._proxy
         
-        # Настраиваем параметры отпечатка
         new_client.device_model = chosen_api.device_model
         new_client.system_version = chosen_api.system_version
         new_client.app_version = chosen_api.app_version
 
         await new_client.connect()
 
-        # Запрашиваем код авторизации на новый девайс
         sent_code = await new_client.send_code_request(phone)
         
-        # Ждем поступления кода в чат Telegram (777000) на старой сессии (максимум 30 секунд)
         code = None
         for _ in range(15):
             await asyncio.sleep(2)
             async for message in old_client.iter_messages(777000, limit=3):
                 if message.text and any(char.isdigit() for char in message.text):
-                    # Извлекаем цифры кода из текста сообщения
                     import re
                     digits = re.findall(r'\d+', message.text)
                     for d in digits:
-                        if len(d) >= 5: # коды телеграма обычно от 5 цифр
+                        if len(d) >= 5:
                             code = d
                             break
                 if code: break
@@ -190,16 +184,13 @@ async def create_new_session_from_tdata(tdata_path: str, proxy_dict: dict, acc_i
         if not code:
             return {"status": "error", "error_msg": "Таймаут: код авторизации не поступил в чат 777000"}
 
-        # Поведенческая задержка (Пункт 4)
         await asyncio.sleep(random.uniform(1.5, 3.0))
 
         try:
             await new_client.sign_in(phone=phone, code=code, phone_code_hash=sent_code.phone_code_hash)
         except SessionPasswordNeededError:
-            # Если требуется облачный пароль 2FA (можно подставить дефолтный или запрашивать)
             return {"status": "error", "error_msg": "Требуется 2FA пароль (облачный пароль)"}
 
-        # Проверяем успешность авторизации новой сессии
         new_me = await new_client.get_me()
 
         avatar_url = None
@@ -229,7 +220,6 @@ async def create_new_session_from_tdata(tdata_path: str, proxy_dict: dict, acc_i
         return {"status": "error", "error_msg": str(e)}
     finally:
         await old_client.disconnect()
-        # Очищаем временную старую сессию
         if old_session_file.exists(): old_session_file.unlink()
 
 async def process_zip(zip_path: str):
@@ -327,6 +317,17 @@ def list_accounts():
         })
     db.close()
     return accounts_data
+
+@app.get("/download/{acc_id}")
+def download_session(acc_id: str):
+    session_file = SESS_DIR / f"{acc_id}.session"
+    if not session_file.exists():
+        return JSONResponse({"error": "Файл сессии не найден"}, status_code=404)
+    return FileResponse(
+        path=str(session_file), 
+        filename=f"{acc_id}.session", 
+        media_type='application/octet-stream'
+    )
 
 @app.delete("/accounts/{acc_id}")
 def delete_account(acc_id: str):
