@@ -15,6 +15,7 @@
             --accent-hover: #2563eb;
             --danger: #ef4444;
             --success: #22c55e;
+            --warning: #f59e0b;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
         body { background-color: var(--bg-color); color: var(--text-main); padding: 12px; }
@@ -29,7 +30,7 @@
         button { background: var(--accent); color: #fff; border: none; padding: 12px; border-radius: 8px; font-weight: 500; cursor: pointer; width: 100%; font-size: 14px; }
         button:hover { background: var(--accent-hover); }
         .table-container { background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 12px; overflow-x: auto; margin-top: 10px; }
-        table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; min-width: 750px; }
+        table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; min-width: 900px; }
         th, td { padding: 10px 12px; border-bottom: 1px solid var(--border-color); white-space: nowrap; }
         th { background: #0f1520; color: var(--text-muted); font-weight: 500; }
         .badge { padding: 3px 6px; border-radius: 6px; font-size: 10px; font-weight: 500; display: inline-block; cursor: pointer; }
@@ -38,6 +39,8 @@
         .badge-prem { background: rgba(234,179,8,0.1); color: #eab308; }
         .actions { display: flex; gap: 6px; align-items: center; }
         .btn-sm { padding: 6px 10px; font-size: 11px; width: auto; }
+        .btn-success { background: rgba(34,197,94,0.2); color: var(--success); }
+        .btn-warning { background: rgba(245,158,11,0.2); color: var(--warning); }
         .btn-danger { background: rgba(239,68,68,0.2); color: var(--danger); }
         .avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
     </style>
@@ -71,8 +74,8 @@
                         <th>Имя / Username</th>
                         <th>Прокси / IP</th>
                         <th>Пинг</th>
-                        <th>Премиум</th>
                         <th>Статус</th>
+                        <th>Управление сеансом</th>
                         <th>Действия</th>
                     </tr>
                 </thead>
@@ -104,9 +107,16 @@
                         <td>${acc.first_name || ''}<br><span style="color:var(--text-muted);font-size:10px">@${acc.username || 'none'}</span></td>
                         <td>${acc.proxy || 'N/A'}<br><span style="color:var(--text-muted);font-size:10px">${acc.ip || ''}</span></td>
                         <td>${acc.ping} ms</td>
-                        <td>${acc.premium ? '<span class="badge badge-prem">⭐ Премиум</span>' : 'Нет'}</td>
                         <td>
                             ${acc.status === 'valid' ? '<span class="badge badge-valid">Активна</span>' : `<span class="badge badge-error" onclick="alert('${safeError}')">Ошибка 🔍</span>`}
+                        </td>
+                        <td>
+                            <div class="actions">
+                                ${acc.is_active_web 
+                                    ? `<button class="btn-sm btn-warning" onclick="closeSession('${acc.id}')">🔴 Закрыть</button>`
+                                    : `<button class="btn-sm btn-success" onclick="openSession('${acc.id}')">🟢 Открыть веб</button>`
+                                }
+                            </div>
                         </td>
                         <td>
                             <div class="actions">
@@ -117,6 +127,21 @@
                     </tr>
                 `;}).join('');
             } catch (err) { console.error(err); }
+        }
+
+        async function openSession(id) {
+            alert('🔄 Инициализация авторизации под прокси и фингерпринт...');
+            const res = await fetch(`/auth/open/${id}`, { method: 'POST' });
+            const data = await res.json();
+            alert(data.message || 'Сеанс запущен!');
+            loadAccounts();
+        }
+
+        async function closeSession(id) {
+            const res = await fetch(`/auth/close/${id}`, { method: 'POST' });
+            const data = await res.json();
+            alert(data.message || 'Сеанс закрыт и сохранен.');
+            loadAccounts();
         }
 
         async function uploadProxies() {
@@ -137,10 +162,10 @@
             if (!fileInput.files[0]) return;
             const formData = new FormData();
             formData.append('file', fileInput.files[0]);
-            document.getElementById('uploadText').innerText = '⏳ Распаковка и проверка сессий...';
+            document.getElementById('uploadText').innerText = '⏳ Распаковка и проверка...';
             
             await fetch('/upload-session', { method: 'POST', body: formData });
-            alert('ZIP архив принят! Сессии из папок проверяются в фоне.');
+            alert('ZIP архив принят! Сессии обрабатываются.');
             setTimeout(loadAccounts, 4000);
             document.getElementById('uploadText').innerText = '📁 Выбрать ZIP архив с папками аккаунтов';
             fileInput.value = '';
