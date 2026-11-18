@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TWKS Manager</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style> body { font-family: 'Inter', sans-serif; background-color: #f8fafc; } </style>
+</head>
+<body class="text-slate-800">
+
+    <!-- Навбар -->
+    <nav class="bg-white border-b border-slate-200 px-6 py-4 flex justify-between items-center sticky top-0 z-10">
+        <div class="flex items-center gap-3">
+            <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold">T</div>
+            <h1 class="text-xl font-semibold">Менеджер аккаунтов</h1>
+        </div>
+        <button onclick="openModal()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition">
+            + Импортировать
+        </button>
+    </nav>
+
+    <!-- Основной контент -->
+    <main class="max-w-4xl mx-auto mt-8 p-4">
+        <div id="accounts-list" class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+            <div class="p-8 text-center text-slate-500" id="empty-state">
+                <svg class="w-12 h-12 mx-auto mb-4 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path></svg>
+                <p>Нет загруженных аккаунтов</p>
+                <p class="text-sm mt-1">Нажмите «Импортировать», чтобы начать</p>
+            </div>
+            <ul id="accounts-ul" class="divide-y divide-slate-100 hidden"></ul>
+        </div>
+    </main>
+
+    <!-- Модалка импорта -->
+    <div id="import-modal" class="fixed inset-0 bg-slate-900/50 hidden items-center justify-center z-50">
+        <div class="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl relative">
+            <button onclick="closeModal()" class="absolute top-4 right-4 text-slate-400 hover:text-slate-600">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+            </button>
+            <h2 class="text-xl font-semibold mb-4">Импорт аккаунтов</h2>
+            
+            <!-- Шаг 1: Прокси -->
+            <div class="mb-6">
+                <label class="block text-sm font-medium text-slate-700 mb-2">1. Загрузите прокси (txt)</label>
+                <input type="file" id="proxy-input" accept=".txt" class="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"/>
+            </div>
+
+            <!-- Шаг 2: TData -->
+            <div class="mb-6">
+                <label class="block text-sm font-medium text-slate-700 mb-2">2. Загрузите ZIP с tdata</label>
+                <input type="file" id="zip-input" accept=".zip" class="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"/>
+            </div>
+
+            <button onclick="startImport()" id="import-btn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 rounded-xl transition flex justify-center items-center gap-2">
+                <span id="btn-text">Проверить всё</span>
+                <svg id="loader" class="animate-spin h-5 w-5 text-white hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+            </button>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = ''; // Относительный путь, так как фронт и бэк на одном домене
+
+        // Открытие/закрытие модалки
+        function openModal() { document.getElementById('import-modal').classList.remove('hidden'); document.getElementById('import-modal').classList.add('flex'); }
+        function closeModal() { document.getElementById('import-modal').classList.add('hidden'); document.getElementById('import-modal').classList.remove('flex'); }
+
+        // Загрузка данных
+        async function loadAccounts() {
+            try {
+                const res = await fetch(`${API_URL}/accounts`);
+                const data = await res.json();
+                renderAccounts(data);
+            } catch (e) { console.error("Ошибка загрузки:", e); }
+        }
+
+        // Отрисовка списка
+        function renderAccounts(accounts) {
+            const ul = document.getElementById('accounts-ul');
+            const empty = document.getElementById('empty-state');
+            
+            if (!accounts || accounts.length === 0) {
+                ul.classList.add('hidden');
+                empty.classList.remove('hidden');
+                return;
+            }
+
+            empty.classList.add('hidden');
+            ul.classList.remove('hidden');
+            ul.innerHTML = accounts.map(acc => `
+                <li class="p-4 flex items-center justify-between hover:bg-slate-50 transition">
+                    <div class="flex items-center gap-4">
+                        <div class="w-10 h-10 rounded-full bg-gradient-to-br from-blue-100 to-blue-200 flex items-center justify-center text-blue-700 font-bold">
+                            ${(acc.username || 'A')[0].toUpperCase()}
+                        </div>
+                        <div>
+                            <div class="flex items-center gap-2">
+                                <span class="font-medium text-slate-900">${acc.username || 'Без юзернейма'}</span>
+                                <span class="text-xs px-2 py-0.5 rounded-full ${acc.status === 'valid' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}">${acc.status}</span>
+                            </div>
+                            <div class="text-sm text-slate-500">${acc.phone || 'Нет телефона'} · ${acc.device || 'Неизвестно'}</div>
+                            <div class="text-xs text-slate-400 mt-1">${acc.proxy}</div>
+                        </div>
+                    </div>
+                    <button onclick="deleteAccount('${acc.id}')" class="text-red-500 hover:bg-red-50 p-2 rounded-lg transition">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                    </button>
+                </li>
+            `).join('');
+        }
+
+        // Удаление
+        async function deleteAccount(id) {
+            if (!confirm('Удалить аккаунт?')) return;
+            await fetch(`${API_URL}/accounts/${id}`, { method: 'DELETE' });
+            loadAccounts();
+        }
+
+        // Импорт
+        async function startImport() {
+            const proxyFile = document.getElementById('proxy-input').files[0];
+            const zipFile = document.getElementById('zip-input').files[0];
+            
+            if (!proxyFile || !zipFile) {
+                alert('Пожалуйста, выберите файл прокси и ZIP-архив с tdata');
+                return;
+            }
+
+            const btn = document.getElementById('import-btn');
+            const btnText = document.getElementById('btn-text');
+            const loader = document.getElementById('loader');
+
+            btn.disabled = true;
+            btn.classList.add('opacity-75');
+            btnText.innerText = 'Загрузка...';
+            loader.classList.remove('hidden');
+
+            try {
+                // 1. Грузим прокси
+                const proxyData = new FormData();
+                proxyData.append('file', proxyFile);
+                await fetch(`${API_URL}/proxies`, { method: 'POST', body: proxyData });
+
+                // 2. Грузим tdata
+                const zipData = new FormData();
+                zipData.append('file', zipFile);
+                await fetch(`${API_URL}/upload`, { method: 'POST', body: zipData });
+
+                // Ждем немного и обновляем список
+                setTimeout(() => {
+                    loadAccounts();
+                    closeModal();
+                    btn.disabled = false;
+                    btn.classList.remove('opacity-75');
+                    btnText.innerText = 'Проверить всё';
+                    loader.classList.add('hidden');
+                }, 5000);
+
+            } catch (e) {
+                alert('Ошибка при загрузке: ' + e.message);
+                btn.disabled = false;
+                btn.classList.remove('opacity-75');
+                btnText.innerText = 'Проверить всё';
+                loader.classList.add('hidden');
+            }
+        }
+
+        // Первичная загрузка
+        loadAccounts();
+        // Авто-обновление каждые 10 секунд
+        setInterval(loadAccounts, 10000);
+    </script>
+</body>
+</html>
