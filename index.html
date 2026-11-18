@@ -36,7 +36,6 @@
         .badge { padding: 3px 6px; border-radius: 6px; font-size: 10px; font-weight: 500; display: inline-block; cursor: pointer; }
         .badge-valid { background: rgba(34,197,94,0.1); color: var(--success); cursor: default; }
         .badge-error { background: rgba(239,68,68,0.1); color: var(--danger); }
-        .badge-prem { background: rgba(234,179,8,0.1); color: #eab308; }
         .actions { display: flex; gap: 6px; align-items: center; }
         .btn-sm { padding: 6px 10px; font-size: 11px; width: auto; }
         .btn-success { background: rgba(34,197,94,0.2); color: var(--success); }
@@ -130,17 +129,20 @@
         }
 
         async function openSession(id) {
-            alert('🔄 Инициализация авторизации под прокси и фингерпринт...');
             const res = await fetch(`/auth/open/${id}`, { method: 'POST' });
             const data = await res.json();
-            alert(data.message || 'Сеанс запущен!');
-            loadAccounts();
+            if (data.url) {
+                // Моментальный редирект на Telegram Web в текущем окне (без блокировки всплывающих окон)
+                window.location.href = data.url;
+            } else {
+                alert(data.error || 'Ошибка открытия сеанса');
+                loadAccounts();
+            }
         }
 
         async function closeSession(id) {
             const res = await fetch(`/auth/close/${id}`, { method: 'POST' });
             const data = await res.json();
-            alert(data.message || 'Сеанс закрыт и сохранен.');
             loadAccounts();
         }
 
