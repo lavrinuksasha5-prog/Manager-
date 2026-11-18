@@ -80,18 +80,23 @@ def parse_proxy(line: str):
     line = line.strip().rstrip('/')
     if not line or line.startswith("#"): return None
     proxy_type = "http"
-    if line.startswith("http://"): line = line.replace("http://", "")
-    elif line.startswith("https://"): line = line.replace("https://", "")
-    elif line.startswith("socks"): return None
+    if line.startswith("socks5://"):
+        proxy_type = "socks5"
+        line = line.replace("socks5://", "")
+    elif line.startswith("http://"):
+        line = line.replace("http://", "")
 
     user = passw = None
     if "@" in line:
         auth, addr = line.split("@", 1)
         if ":" in auth: user, passw = auth.split(":", 1)
         host, port = addr.split(":")
-    elif line.count(":") == 3: host, port, user, passw = line.split(":")
-    elif line.count(":") == 1: host, port = line.split(":")
-    else: return None
+    elif line.count(":") == 3:
+        host, port, user, passw = line.split(":")
+    elif line.count(":") == 1:
+        host, port = line.split(":")
+    else:
+        return None
 
     port = ''.join(filter(str.isdigit, port))
     if not port: return None
@@ -124,21 +129,7 @@ async def get_proxy_info(proxy: dict):
         pass
     return {"ip": "N/A", "country_code": "UN", "country": "Неизвестно"}, 0
 
-def extract_tdata(zip_path: str) -> list:
-    out = UPLOAD_DIR / uuid.uuid4().hex
-    out.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(zip_path) as zf: zf.extractall(out)
-    
-    found_paths = []
-    for p in out.rglob("*"):
-        if p.is_dir():
-            # Ищем папку, содержащую key_datas или файлы tdata
-            if (p / "key_datas").exists() or any(f.name.isupper() and len(f.name) == 16 for f in p.glob("*")):
-                found_paths.append(str(p))
-    return found_paths
-
 def locate_real_tdata(path_str: str) -> str:
-    """Точно находит директорию с файлами tdata, даже если путь обернут во вложенные папки"""
     p = Path(path_str)
     if (p / "key_datas").exists() or any(f.name.isupper() and len(f.name) == 16 for f in p.glob("*")):
         return str(p)
@@ -148,6 +139,26 @@ def locate_real_tdata(path_str: str) -> str:
                 return str(sub)
     return path_str
 
+def extract_tdata(zip_path: str) -> list:
+    out = UPLOAD_DIR / uuid.uuid4().hex
+    out.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path) as zf: zf.extractall(out)
+    found_paths = []
+    for p in out.rglob("*"):
+        if p.is_dir():
+            if (p / "key_datas").exists() or any(f.name.isupper() and len(f.name) == 16 for f in p.glob("*")):
+                found_paths.append(str(p))
+    return found_paths
+
+def get_safe_proxy_tuple(proxy_str: str):
+    p_parts = proxy_str.split(":")
+    addr = p_parts[0]
+    port = int(p_parts[1])
+    s_type = socks.SOCKS5 if "socks5" in proxy_str.lower() else socks.HTTP
+    if len(p_parts) >= 4:
+        return (s_type, addr, port, True, p_parts[2], p_parts[3])
+    return (s_type, addr, port)
+
 async def validate_tdata_base(tdata_path: str, proxy_dict: dict, acc_id: str):
     temp_session = SESS_DIR / f"{acc_id}_temp.session"
     if temp_session.exists(): temp_session.unlink()
@@ -155,8 +166,11 @@ async def validate_tdata_base(tdata_path: str, proxy_dict: dict, acc_id: str):
         real_path = locate_real_tdata(tdata_path)
         tdesk = TDesktop(real_path)
         client = await tdesk.ToTelethon(str(temp_session), UseCurrentSession)
-        p_tuple = (socks.HTTP, proxy_dict['addr'], proxy_dict['port'], True, proxy_dict.get('username'), proxy_dict.get('password')) if proxy_dict.get('username') else (socks.HTTP, proxy_dict['addr'], proxy_dict['port'])
-        client.proxy = p_tuple
+        
+        if proxy_dict.get('username'):
+            client.proxy = (socks.HTTP, proxy_dict['addr'], proxy_dict['port'], True, proxy_dict['username'], proxy_dict['password'])
+        else:
+            client.proxy = (socks.HTTP, proxy_dict['addr'], proxy_dict['port'])
 
         net_info, ping_ms = await get_proxy_info(proxy_dict)
         await client.connect()
@@ -173,19 +187,10 @@ async def validate_tdata_base(tdata_path: str, proxy_dict: dict, acc_id: str):
 
         await client.disconnect()
         return {
-            "status": "valid",
-            "user_id": me.id,
-            "username": me.username,
-            "first_name": me.first_name,
-            "phone": me.phone,
-            "avatar_url": avatar_url,
-            "country": net_info["country"],
-            "country_code": net_info["country_code"],
-            "proxy_country": net_info["country"],
-            "ip": net_info["ip"],
-            "ping": ping_ms,
-            "premium": getattr(me, "premium", False),
-            "error_msg": None
+            "status": "valid", "user_id": me.id, "username": me.username, "first_name": me.first_name,
+            "phone": me.phone, "avatar_url": avatar_url, "country": net_info["country"],
+            "country_code": net_info["country_code"], "proxy_country": net_info["country"],
+            "ip": net_info["ip"], "ping": ping_ms, "premium": getattr(me, "premium", False), "error_msg": None
         }
     except Exception as e:
         return {"status": "error", "error_msg": str(e)}
@@ -193,21 +198,24 @@ async def validate_tdata_base(tdata_path: str, proxy_dict: dict, acc_id: str):
         if temp_session.exists(): temp_session.unlink()
 
 def find_2fa_password(tdata_path: str) -> str:
-    """Ищет 2FA пароль в папках 2fa, 2FA, pass или файлах конфигурации"""
+    """Ищет 2FA пароль в папках и файлах 2fa, 2FA, pass или configuration"""
     try:
         base_path = Path(locate_real_tdata(tdata_path))
         for path in base_path.parent.rglob("*"):
             name_lower = path.name.lower()
-            if "2fa" in name_lower or "pass" in name_lower or "password" in name_lower:
+            if "2fa" in name_lower or "pass" in name_lower or "password" in name_lower or "conf" in name_lower:
                 if path.is_file():
-                    content = path.read_text(encoding="utf-8", errors="ignore").strip()
-                    if content and len(content) < 100: return content
+                    try:
+                        content = path.read_text(encoding="utf-8", errors="ignore").strip()
+                        if content and len(content) < 100: return content
+                    except: pass
                 elif path.is_dir():
                     for sub_file in path.glob("*"):
-                        content = sub_file.read_text(encoding="utf-8", errors="ignore").strip()
-                        if content and len(content) < 100: return content
-    except Exception:
-        pass
+                        try:
+                            content = sub_file.read_text(encoding="utf-8", errors="ignore").strip()
+                            if content and len(content) < 100: return content
+                        except: pass
+    except: pass
     return None
 
 @app.post("/login/{acc_id}")
@@ -219,14 +227,7 @@ async def login_and_create_session(acc_id: str):
         return JSONResponse({"error": "Аккаунт или tdata не найдены"}, status_code=404)
 
     tdata_path = locate_real_tdata(acc.tdata_path)
-    p_parts = acc.proxy.split(":")
-    proxy_addr = p_parts[0]
-    proxy_port = int(p_parts[1])
-    
-    if len(p_parts) >= 4:
-        proxy_tuple = (socks.HTTP, proxy_addr, proxy_port, True, p_parts[2], p_parts[3])
-    else:
-        proxy_tuple = (socks.HTTP, proxy_addr, proxy_port)
+    proxy_tuple = get_safe_proxy_tuple(acc.proxy)
 
     old_session_file = SESS_DIR / f"{acc_id}_old.session"
     new_session_file = SESS_DIR / f"{acc_id}.session"
@@ -234,6 +235,7 @@ async def login_and_create_session(acc_id: str):
         if sf.exists(): sf.unlink()
 
     try:
+        # 1. Подключаем старый клиент для чтения 777000
         tdesk = TDesktop(tdata_path)
         old_client = await tdesk.ToTelethon(str(old_session_file), UseCurrentSession)
         old_client.proxy = proxy_tuple
@@ -244,6 +246,8 @@ async def login_and_create_session(acc_id: str):
             return JSONResponse({"error": "Базовая сессия слетела"}, status_code=400)
 
         phone = acc.phone
+
+        # 2. Создаем новый клиент с фингерпринтом Android для полноценной новой авторизации
         chosen_api = API.TelegramAndroid.Generate(unique_id=acc_id)
         new_client = TelegramClient(str(new_session_file), api_id=chosen_api.api_id, api_hash=chosen_api.api_hash, proxy=proxy_tuple)
         new_client.device_model = chosen_api.device_model
@@ -251,8 +255,11 @@ async def login_and_create_session(acc_id: str):
         new_client.app_version = chosen_api.app_version
 
         await new_client.connect()
+        
+        # Запрашиваем код авторизации на новое устройство
         sent_code = await new_client.send_code_request(phone)
 
+        # 3. Перехватываем код из служебного чата 777000 через старый клиент
         code = None
         for _ in range(15):
             await asyncio.sleep(2)
@@ -275,6 +282,7 @@ async def login_and_create_session(acc_id: str):
 
         await asyncio.sleep(random.uniform(1.0, 2.0))
         
+        # 4. Проходим авторизацию нового устройства с автопоиском 2FA при необходимости
         try:
             await new_client.sign_in(phone=phone, code=code, phone_code_hash=sent_code.phone_code_hash)
         except SessionPasswordNeededError:
@@ -283,11 +291,11 @@ async def login_and_create_session(acc_id: str):
                 await old_client.disconnect()
                 await new_client.disconnect()
                 db.close()
-                return JSONResponse({"error": "Требуется 2FA пароль, но файл/папка 2FA не найдены"}, status_code=400)
+                return JSONResponse({"error": "Требуется 2FA пароль, но папка/файл 2fa не найдены в tdata"}, status_code=400)
             
             await new_client.sign_in(password=password)
 
-        acc.device = "Android 13.0 (Auth)"
+        acc.device = "Android 13.0 (New Auth)"
         db.commit()
         db.close()
 
@@ -295,7 +303,7 @@ async def login_and_create_session(acc_id: str):
         await new_client.disconnect()
         if old_session_file.exists(): old_session_file.unlink()
 
-        return {"status": "success", "message": "Новая авторизация успешно пройдена!"}
+        return {"status": "success", "message": "Новая авторизация и создание сессии успешно завершены!"}
     except Exception as e:
         db.close()
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -318,22 +326,12 @@ async def process_zip(zip_path: str):
             if res.get("phone"): existing_phones.add(res["phone"])
 
             db.add(Account(
-                id=acc_id, 
-                user_id=res.get("user_id"), 
-                username=res.get("username"),
-                first_name=res.get("first_name"), 
-                phone=res.get("phone"),
-                avatar_url=res.get("avatar_url"), 
-                proxy=f"{proxy_dict['addr']}:{proxy_dict['port']}",
-                proxy_country=res.get("proxy_country"), 
-                ip=res.get("ip"), 
-                ping=res.get("ping"),
-                country=res.get("country"), 
-                country_code=res.get("country_code"),
-                premium=res.get("premium"), 
-                status=res.get("status", "error"), 
-                error_msg=res.get("error_msg"),
-                tdata_path=td
+                id=acc_id, user_id=res.get("user_id"), username=res.get("username"),
+                first_name=res.get("first_name"), phone=res.get("phone"), avatar_url=res.get("avatar_url"),
+                proxy=f"{proxy_dict['addr']}:{proxy_dict['port']}", proxy_country=res.get("proxy_country"),
+                ip=res.get("ip"), ping=res.get("ping"), country=res.get("country"),
+                country_code=res.get("country_code"), premium=res.get("premium"),
+                status=res.get("status", "error"), error_msg=res.get("error_msg"), tdata_path=td
             ))
         except Exception as e:
             db.add(Account(id=acc_id, status="error", proxy="direct", error_msg=str(e)))
@@ -350,7 +348,7 @@ async def upload_proxies_text(data: ProxyList):
     for line in data.text.splitlines():
         p = parse_proxy(line)
         if p:
-            db.add(Proxy(addr=p["addr"], port=p["port"], username=p["username"], password=p["password"], proxy_type="http"))
+            db.add(Proxy(addr=p["addr"], port=p["port"], username=p["username"], password=p["password"], proxy_type=p["proxy_type"]))
             count += 1
     db.commit(); db.close()
     return {"status": "ok", "added": count}
@@ -371,30 +369,17 @@ def list_accounts():
         avatar_path = None
         if r.avatar_url:
             local_file = Path("/app") / r.avatar_url.lstrip("/")
-            if local_file.exists():
-                avatar_path = r.avatar_url
+            if local_file.exists(): avatar_path = r.avatar_url
         
         session_file = SESS_DIR / f"{r.id}.session"
         has_session = session_file.exists()
 
         accounts_data.append({
-            "id": r.id, 
-            "user_id": r.user_id, 
-            "username": r.username, 
-            "first_name": r.first_name,
-            "phone": r.phone, 
-            "avatar_url": avatar_path, 
-            "device": r.device, 
-            "proxy": r.proxy,
-            "proxy_country": r.proxy_country, 
-            "ip": r.ip, 
-            "ping": r.ping, 
-            "country": r.country,
-            "country_code": r.country_code, 
-            "premium": r.premium, 
-            "status": r.status, 
-            "error_msg": r.error_msg,
-            "has_session": has_session,
+            "id": r.id, "user_id": r.user_id, "username": r.username, "first_name": r.first_name,
+            "phone": r.phone, "avatar_url": avatar_path, "device": r.device, "proxy": r.proxy,
+            "proxy_country": r.proxy_country, "ip": r.ip, "ping": r.ping, "country": r.country,
+            "country_code": r.country_code, "premium": r.premium, "status": r.status,
+            "error_msg": r.error_msg, "has_session": has_session,
             "created_at": r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else ""
         })
     db.close()
