@@ -240,7 +240,6 @@ def delete_account(acc_id: str):
     db.commit(); db.close()
     return {"status": "deleted"}
 
-# --- Истинный шлюз с инъекцией IndexedDB и загрузкой WebK клиента в песочнице ---
 @app.get("/client/{acc_id}", response_class=HTMLResponse)
 async def open_telegram_client(acc_id: str):
     db = SessionDB()
@@ -269,7 +268,7 @@ async def open_telegram_client(acc_id: str):
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-        <title>Telegram Web Client Gateway</title>
+        <title>Telegram Web Client</title>
         <style>
             body, html {{ margin: 0; padding: 0; width: 100%; height: 100%; background: #0b0e14; overflow: hidden; }}
             #loader {{ position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #0b0e14; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 9999; color: #fff; font-family: sans-serif; }}
@@ -281,7 +280,7 @@ async def open_telegram_client(acc_id: str):
     <body>
         <div id="loader">
             <div class="spinner"></div>
-            <h2 style="margin-top: 15px; font-weight: 500; font-size: 15px;">Авторизация и запуск сессии...</h2>
+            <h2 style="margin-top: 15px; font-weight: 500; font-size: 15px;">Запуск сессии...</h2>
         </div>
 
         <script>
@@ -316,20 +315,19 @@ async def open_telegram_client(acc_id: str):
                     store.put(JSON.stringify({{ dcID: dcId, id: userId }}), 'user_auth');
 
                     tx.oncomplete = function() {{
-                        // Используем официальный веб-интерфейс с принудительной передачей параметров в хранилище через пост-сообщение
                         document.getElementById('loader').style.display = 'none';
                         const iframe = document.createElement('iframe');
-                        iframe.src = "https://web.telegram.org/k/#@s";
+                        iframe.src = "https://web.telegram.org/k/";
                         iframe.style.display = 'block';
                         document.body.appendChild(iframe);
                     }};
                 };
 
                 request.onerror = function() {{
-                    document.getElementById('loader').innerHTML = "<h3 style='color:#ef4444'>Ошибка IndexedDB базы</h3>";
+                    document.getElementById('loader').innerHTML = "<h3 style='color:#ef4444'>Ошибка базы данных IndexedDB</h3>";
                 }};
             } catch (err) {{
-                document.getElementById('loader').innerHTML = "<h3 style='color:#ef4444'>Ошибка инъекции: " + err.message + "</h3>";
+                document.getElementById('loader').innerHTML = "<h3 style='color:#ef4444'>Ошибка: " + err.message + "</h3>";
             }}
         </script>
     </body>
