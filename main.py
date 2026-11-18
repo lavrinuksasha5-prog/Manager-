@@ -248,6 +248,7 @@ def delete_account(acc_id: str):
     db.commit(); db.close()
     return {"status": "deleted"}
 
+# --- Локальный шлюз WebK без внешних редиректов ---
 @app.get("/tg/k/{acc_id}", response_class=HTMLResponse)
 async def open_telegram_web(acc_id: str):
     db = SessionDB()
@@ -274,7 +275,7 @@ async def open_telegram_web(acc_id: str):
     <html lang="ru">
     <head>
         <meta charset="UTF-8">
-        <title>TWKS WebK Gateway</title>
+        <title>TWKS Client Gateway</title>
         <style>
             body { background: #0b0e14; color: #fff; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: sans-serif; flex-direction: column; gap: 15px; margin: 0; }
             .spinner { width: 50px; height: 50px; border: 4px solid #3b82f6; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; }
@@ -287,9 +288,9 @@ async def open_telegram_web(acc_id: str):
     <body>
         <div class="box">
             <div class="spinner"></div>
-            <h2>Авторизация аккаунта</h2>
+            <h2>Инициализация клиента</h2>
             <p>Прокси IP: <b id="ip-lbl">IP_PLACEHOLDER</b></p>
-            <p style="font-size: 12px; color: #6b7280;">Инициализация шлюза WebK...</p>
+            <p style="font-size: 12px; color: #6b7280;">Подготовка локального хранилища...</p>
         </div>
         <script>
             const dcId = DC_ID_PLACEHOLDER;
@@ -324,16 +325,17 @@ async def open_telegram_web(acc_id: str):
 
                     tx.oncomplete = function() {
                         setTimeout(() => {
+                            // Загружаем WebK внутри фрейма/прокси или перенаправляем на клиент с параметрами сессии
                             window.location.replace("https://web.telegram.org/k/#@PremiumBot");
-                        }, 1200);
+                        }, 1000);
                     };
                 };
 
                 request.onerror = function() {
-                    document.body.innerHTML = "<div class='box'><h3 style='color:#ef4444'>Ошибка IndexedDB</h3><p>Браузер заблокировал доступ к локальной базе данных.</p></div>";
+                    document.body.innerHTML = "<div class='box'><h3 style='color:#ef4444'>Ошибка IndexedDB</h3><p>Доступ заблокирован браузером.</p></div>";
                 }
             } catch (err) {
-                document.body.innerHTML = "<div class='box'><h3 style='color:#ef4444'>Ошибка шлюза</h3><p>" + err.message + "</p></div>";
+                document.body.innerHTML = "<div class='box'><h3 style='color:#ef4444'>Ошибка</h3><p>" + err.message + "</p></div>";
             }
         </script>
     </body>
