@@ -2,252 +2,257 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TWKS Manager</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        body { font-family: 'Inter', sans-serif; background-color: #0B1120; color: #F8FAFC; -webkit-tap-highlight-color: transparent; }
-        @keyframes fadeInUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        .animate-card { animation: fadeInUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; opacity: 0; }
-        ::-webkit-scrollbar { width: 4px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
-        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.05); }
+        :root {
+            --bg-color: #0b0e14;
+            --card-bg: #131823;
+            --border-color: #1e2636;
+            --accent-color: #3b82f6;
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --success: #10b981;
+            --error: #ef4444;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        body { background-color: var(--bg-color); color: var(--text-main); padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; background: var(--card-bg); padding: 16px 20px; border-radius: 12px; border: 1px solid var(--border-color); }
+        .logo { display: flex; align-items: center; gap: 10px; font-weight: bold; font-size: 18px; }
+        .logo-icon { background: var(--accent-color); color: white; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 8px; }
+        .btn { background: var(--accent-color); color: white; border: none; padding: 10px 16px; border-radius: 8px; cursor: pointer; font-weight: 600; transition: opacity 0.2s; }
+        .btn:hover { opacity: 0.9; }
+        .btn-danger { background: var(--error); }
+        .btn-secondary { background: #374151; }
+        
+        .accounts-list { display: flex; flex-direction: column; gap: 16px; }
+        .account-card { background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+        .acc-header { display: flex; justify-content: space-between; align-items: center; }
+        .acc-info { display: flex; align-items: center; gap: 12px; }
+        .avatar { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; background: #374151; }
+        .acc-name { font-weight: 600; font-size: 16px; }
+        .acc-username { color: var(--text-muted); font-size: 13px; }
+        .badge { padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
+        .badge-online { background: rgba(16, 185, 129, 0.15); color: var(--success); }
+        .badge-error { background: rgba(239, 68, 68, 0.15); color: var(--error); }
+        
+        .acc-details { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 8px; font-size: 12px; }
+        .detail-item label { color: var(--text-muted); display: block; margin-bottom: 2px; }
+        .detail-item val { font-weight: 600; }
+        
+        .acc-footer { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+        .proxy-info { color: var(--text-muted); font-size: 13px; }
+        .acc-actions { display: flex; gap: 8px; }
+
+        /* Модальные окна */
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); justify-content: center; align-items: center; z-index: 1000; }
+        .modal-content { background: var(--card-bg); border: 1px solid var(--border-color); padding: 24px; border-radius: 12px; width: 100%; max-width: 400px; display: flex; flex-direction: column; gap: 16px; }
+        .modal-content h3 { font-size: 18px; }
+        .form-group { display: flex; flex-direction: column; gap: 6px; }
+        .form-group label { font-size: 13px; color: var(--text-muted); }
+        .form-control { background: var(--bg-color); border: 1px solid var(--border-color); color: white; padding: 10px; border-radius: 8px; font-size: 14px; }
+        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
     </style>
 </head>
-<body class="antialiased pb-24">
-    <nav class="glass sticky top-0 z-30 px-4 py-3 flex justify-between items-center">
-        <div class="flex items-center gap-2.5">
-            <div class="w-8 h-8 bg-blue-500 rounded-xl flex items-center justify-center text-white font-bold shadow-lg shadow-blue-500/30">T</div>
-            <h1 class="text-[17px] font-bold tracking-tight">Менеджер</h1>
-        </div>
-        <button onclick="openImportModal()" class="bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-xl text-xs font-semibold transition-all active:scale-95 flex items-center gap-1.5 border border-slate-700/50">
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"></path></svg>
-            Импорт
-        </button>
-    </nav>
-
-    <main class="max-w-2xl mx-auto mt-4 px-3 space-y-2.5">
-        <div id="empty-state" class="text-center py-20 opacity-40">
-            <p class="text-sm font-medium">Нет аккаунтов</p>
-        </div>
-        <div id="accounts-grid" class="space-y-2.5"></div>
-    </main>
-
-    <!-- Модалка Импорта -->
-    <div id="import-modal" class="fixed inset-0 bg-[#0B1120]/80 backdrop-blur-md hidden items-end sm:items-center justify-center z-50 transition-opacity">
-        <div class="bg-[#1E293B] rounded-t-[2rem] sm:rounded-[2rem] w-full max-w-md p-6 shadow-2xl relative border border-slate-700/50">
-            <div class="flex justify-between items-center mb-5">
-                <h2 class="text-lg font-bold text-white">Импорт</h2>
-                <button onclick="closeImportModal()" class="text-slate-400 hover:text-white bg-slate-800 p-2 rounded-full"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg></button>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo">
+                <div class="logo-icon">T</div>
+                <span>Менеджер</span>
             </div>
-            
-            <div class="mb-4">
-                <label class="block text-xs font-medium text-slate-400 mb-1.5">Прокси (по одному в строке)</label>
-                <textarea id="proxy-textarea" rows="3" placeholder="socks5://user:pass@ip:port" class="block w-full text-sm p-3 bg-[#0F172A] border border-slate-700 rounded-xl focus:ring-1 focus:ring-blue-500 outline-none resize-none text-slate-200 placeholder-slate-600 transition"></textarea>
-            </div>
+            <button class="btn" onclick="openImportModal()">+ Импорт</button>
+        </header>
 
-            <div class="mb-5">
-                <label class="block text-xs font-medium text-slate-400 mb-1.5">ZIP с tdata</label>
-                <div class="relative border border-dashed border-slate-600 hover:border-blue-500 transition rounded-xl p-3 text-center cursor-pointer bg-[#0F172A]">
-                    <input type="file" id="zip-input" accept=".zip" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
-                    <p id="file-name" class="text-xs text-slate-400">Нажмите, чтобы выбрать файл</p>
-                </div>
-            </div>
-
-            <button onclick="startImport()" id="import-btn" class="w-full bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold py-3 rounded-xl transition-all active:scale-95 flex justify-center items-center gap-2">
-                <span id="btn-text">Запустить проверку</span>
-            </button>
+        <div class="accounts-list" id="accountsList">
+            <!-- Аккаунты подгружаются динамически -->
         </div>
     </div>
 
-    <!-- Модалка Смены Прокси -->
-    <div id="change-proxy-modal" class="fixed inset-0 bg-[#0B1120]/80 backdrop-blur-md hidden items-end sm:items-center justify-center z-50 transition-opacity">
-        <div class="bg-[#1E293B] rounded-t-[2rem] sm:rounded-[2rem] w-full max-w-md p-6 shadow-2xl relative border border-slate-700/50">
-            <div class="flex justify-between items-center mb-5">
-                <h2 class="text-lg font-bold text-white">Сменить прокси</h2>
-                <button onclick="closeProxyModal()" class="text-slate-400 hover:text-white bg-slate-800 p-2 rounded-full"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg></button>
+    <!-- Модалка импорта -->
+    <div class="modal" id="importModal">
+        <div class="modal-content">
+            <h3>Импорт прокси и tdata</h3>
+            <div class="form-group">
+                <label>Прокси (HTTP формат user:pass@host:port)</label>
+                <textarea class="form-control" id="proxyInput" rows="4" placeholder="Вставьте прокси списком..."></textarea>
             </div>
-            <div class="mb-5">
-                <label class="block text-xs font-medium text-slate-400 mb-1.5">Новый прокси</label>
-                <input type="text" id="new-proxy-input" placeholder="socks5://user:pass@ip:port" class="block w-full text-sm p-3 bg-[#0F172A] border border-slate-700 rounded-xl focus:ring-1 focus:ring-blue-500 outline-none text-slate-200">
+            <div class="form-group">
+                <label>ZIP архив с tdata</label>
+                <input type="file" class="form-control" id="zipInput" accept=".zip">
             </div>
-            <button onclick="saveProxy()" id="change-proxy-btn" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold py-3 rounded-xl transition-all active:scale-95">Сохранить</button>
+            <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
+                <button class="btn btn-secondary" onclick="closeImportModal()">Отмена</button>
+                <button class="btn" onclick="submitImport()">Загрузить</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модалка покупки Премиума -->
+    <div class="modal" id="payModal">
+        <div class="modal-content">
+            <h3>Покупка Telegram Premium (1 месяц)</h3>
+            <input type="hidden" id="payAccId">
+            <div class="form-group">
+                <label>Номер карты</label>
+                <input type="text" class="form-control" id="cardNumber" placeholder="0000 0000 0000 0000">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Месяц / Год</label>
+                    <div style="display: flex; gap: 5px;">
+                        <input type="text" class="form-control" id="expMonth" placeholder="MM">
+                        <input type="text" class="form-control" id="expYear" placeholder="YY">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>CVV</label>
+                    <input type="password" class="form-control" id="cardCvv" placeholder="123" maxlength="4">
+                </div>
+            </div>
+            <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
+                <button class="btn btn-secondary" onclick="closePayModal()">Отмена</button>
+                <button class="btn" onclick="submitPayment()">Оплатить</button>
+            </div>
         </div>
     </div>
 
     <script>
-        const API_URL = '';
-        let currentAccId = null;
-
-        function openImportModal() { document.getElementById('import-modal').classList.remove('hidden'); document.getElementById('import-modal').classList.add('flex'); }
-        function closeImportModal() { document.getElementById('import-modal').classList.add('hidden'); document.getElementById('import-modal').classList.remove('flex'); }
-        function openProxyModal(id) { currentAccId = id; document.getElementById('change-proxy-modal').classList.remove('hidden'); document.getElementById('change-proxy-modal').classList.add('flex'); }
-        function closeProxyModal() { document.getElementById('change-proxy-modal').classList.add('hidden'); document.getElementById('change-proxy-modal').classList.remove('flex'); }
-
-        document.getElementById('zip-input').addEventListener('change', function(e) {
-            const fileName = e.target.files[0]?.name || 'Нажмите, чтобы выбрать файл';
-            document.getElementById('file-name').textContent = fileName;
-            document.getElementById('file-name').classList.add('text-blue-400');
-        });
-
         async function loadAccounts() {
             try {
-                const res = await fetch(`${API_URL}/accounts`);
-                const data = await res.json();
-                renderAccounts(data);
-            } catch (e) { console.error(e); }
-        }
+                const res = await fetch('/accounts');
+                const accounts = await res.json();
+                const list = document.getElementById('accountsList');
+                list.innerHTML = '';
 
-        function renderAccounts(accounts) {
-            const grid = document.getElementById('accounts-grid');
-            const empty = document.getElementById('empty-state');
-            if (!accounts || accounts.length === 0) { grid.innerHTML = ''; empty.classList.remove('hidden'); return; }
-            empty.classList.add('hidden');
-            
-            grid.innerHTML = accounts.map((acc, index) => {
-                const isPremium = acc.premium ? '<span class="text-emerald-400 text-xs font-medium">Да</span>' : '<span class="text-slate-500 text-xs font-medium">Нет</span>';
-                const statusBadge = acc.status === 'valid' 
-                    ? '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">ONLINE</span>' 
-                    : '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-red-500/10 text-red-400 border border-red-500/20">ERROR</span>';
-
-                const avatarHtml = acc.avatar_url 
-                    ? `<img src="${acc.avatar_url}" class="w-9 h-9 rounded-full object-cover border border-slate-700">`
-                    : `<div class="w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-bold text-sm">${(acc.first_name || acc.username || 'A')[0].toUpperCase()}</div>`;
-
-                const displayName = acc.first_name || acc.username || 'Без имени';
-                const displaySub = acc.username ? `@${acc.username}` : (acc.phone || 'Нет данных');
-
-                if (acc.status === 'error') {
-                    return `
-                    <div class="glass rounded-2xl p-3.5 animate-card" style="animation-delay: ${index * 0.05}s">
-                        <div class="flex justify-between items-center">
-                            <div class="flex items-center gap-3">
-                                <div class="w-8 h-8 rounded-full bg-red-500/10 flex items-center justify-center text-red-400 border border-red-500/20">!</div>
-                                <div>
-                                    <h3 class="font-medium text-sm text-slate-200">Ошибка</h3>
-                                    <p class="text-[11px] text-slate-500 font-mono mt-0.5">${acc.proxy || 'direct'}</p>
-                                </div>
-                            </div>
-                            ${statusBadge}
-                        </div>
-                        <div class="bg-red-500/5 border border-red-500/10 rounded-lg p-2 text-xs text-red-400 mt-2 truncate">${acc.error_msg || 'Неизвестная ошибка'}</div>
-                        <button onclick="deleteAccount('${acc.id}')" class="mt-2.5 w-full bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs py-1.5 rounded-lg transition">Удалить</button>
-                    </div>`;
+                if (accounts.length === 0) {
+                    list.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 40px;">Нет добавленных аккаунтов</div>';
+                    return;
                 }
 
-                return `
-                <div class="glass rounded-2xl p-3.5 animate-card relative overflow-hidden group" style="animation-delay: ${index * 0.05}s">
-                    <div class="flex justify-between items-start mb-2.5">
-                        <div class="flex items-center gap-2.5">
-                            ${avatarHtml}
-                            <div>
-                                <h3 class="font-semibold text-sm text-white leading-tight">${displayName}</h3>
-                                <p class="text-[11px] text-slate-400">${displaySub}</p>
+                accounts.forEach(acc => {
+                    const card = document.createElement('div');
+                    card.className = 'account-card';
+                    card.innerHTML = `
+                        <div class="acc-header">
+                            <div class="acc-info">
+                                <img src="${acc.avatar_url || 'https://via.placeholder.com/44'}" class="avatar" alt="">
+                                <div>
+                                    <div class="acc-name">${acc.first_name || 'Аккаунт'}</div>
+                                    <div class="acc-username">@${acc.username || 'no_username'}</div>
+                                </div>
+                            </div>
+                            <span class="badge ${acc.status === 'valid' ? 'badge-online' : 'badge-error'}">${acc.status === 'valid' ? 'ONLINE' : 'ERROR'}</span>
+                        </div>
+                        <div class="acc-details">
+                            <div class="detail-item"><label>Страна</label><val>${acc.country || 'Неизвестно'}</val></div>
+                            <div class="detail-item"><label>IP</label><val>${acc.ip || 'N/A'}</val></div>
+                            <div class="detail-item"><label>Пиинг</label><val>${acc.ping}ms</val></div>
+                            <div class="detail-item"><label>Premium</label><val>${acc.premium ? 'Да' : 'Нет'}</val></div>
+                        </div>
+                        <div class="acc-footer">
+                            <div class="proxy-info">${acc.proxy || 'Нет прокси'}</div>
+                            <div class="acc-actions">
+                                <button class="btn" onclick="openPayModal('${acc.id}')">Купить</button>
+                                <button class="btn btn-secondary" onclick="openWeb('${acc.id}')">Открыть</button>
+                                <button class="btn btn-danger" onclick="deleteAccount('${acc.id}')">Удалить</button>
                             </div>
                         </div>
-                        ${statusBadge}
-                    </div>
-                    <div class="grid grid-cols-4 gap-1.5 mb-2.5 text-[10px]">
-                        <div class="bg-slate-800/40 rounded-lg p-1.5 border border-slate-700/30 flex flex-col justify-center"><span class="text-slate-500 mb-0.5">Страна</span><span class="text-slate-200 truncate">${acc.country || 'N/A'}</span></div>
-                        <div class="bg-slate-800/40 rounded-lg p-1.5 border border-slate-700/30 flex flex-col justify-center"><span class="text-slate-500 mb-0.5">IP</span><span class="text-slate-200 truncate font-mono">${acc.ip || '...'}</span></div>
-                        <div class="bg-slate-800/40 rounded-lg p-1.5 border border-slate-700/30 flex flex-col justify-center"><span class="text-slate-500 mb-0.5">Пинг</span><span class="text-amber-400 font-mono">${acc.ping || 0}ms</span></div>
-                        <div class="bg-slate-800/40 rounded-lg p-1.5 border border-slate-700/30 flex flex-col justify-center"><span class="text-slate-500 mb-0.5">Premium</span>${isPremium}</div>
-                    </div>
-                    <div class="bg-slate-900/60 rounded-lg px-2 py-1.5 mb-2.5 flex items-center justify-between border border-slate-700/40 group/proxy">
-                        <p class="text-[10px] text-slate-400 truncate w-8/12 font-mono">${acc.proxy}</p>
-                        <div class="flex items-center gap-1">
-                            <button onclick="openProxyModal('${acc.id}')" class="text-[9px] bg-slate-700 hover:bg-slate-600 text-slate-300 px-1.5 py-1 rounded transition">Сменить</button>
-                            <svg class="w-3.5 h-3.5 text-slate-500 cursor-pointer hover:text-white" onclick="navigator.clipboard.writeText('${acc.proxy}')" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
-                        </div>
-                    </div>
-                    <div class="flex gap-1.5">
-                        <button onclick="buyPremium('${acc.id}')" class="flex-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 text-[11px] font-semibold py-2 rounded-lg transition active:scale-95 flex items-center justify-center gap-1">Купить</button>
-                        <button onclick="openWeb('${acc.id}')" class="flex-1 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/20 text-[11px] font-semibold py-2 rounded-lg transition active:scale-95 flex items-center justify-center gap-1">Открыть</button>
-                        <button onclick="deleteAccount('${acc.id}')" class="w-9 bg-slate-800 hover:bg-red-500/20 text-slate-400 hover:text-red-400 border border-slate-700/50 hover:border-red-500/30 rounded-lg transition active:scale-95 flex items-center justify-center"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg></button>
-                    </div>
-                </div>`;
-            }).join('');
-        }
-
-        async function deleteAccount(id) {
-            if (!confirm('Точно удалить?')) return;
-            await fetch(`${API_URL}/accounts/${id}`, { method: 'DELETE' });
-            loadAccounts();
-        }
-
-        async function openWeb(id) {
-            const btn = event.target;
-            btn.innerText = "...";
-            try {
-                const res = await fetch(`${API_URL}/open-web/${id}`, { method: 'POST' });
-                const data = await res.json();
-                if (data.status === 'ok') window.open(data.screenshot, '_blank');
-                else alert("Ошибка: " + data.message);
-            } catch (e) { alert("Ошибка запроса"); } 
-            finally { btn.innerText = "Открыть"; }
-        }
-
-        async function buyPremium(id) {
-            if(!confirm("Купить Premium?")) return;
-            alert("Запуск оплаты (заглушка)...");
-            await fetch(`${API_URL}/buy-premium/${id}`, { method: 'POST' });
-        }
-
-        async function startImport() {
-            const proxyText = document.getElementById('proxy-textarea').value.trim();
-            const zipFile = document.getElementById('zip-input').files[0];
-            
-            if (!proxyText || !zipFile) { alert('Вставьте прокси и выберите ZIP'); return; }
-
-            const btn = document.getElementById('import-btn');
-            const btnText = document.getElementById('btn-text');
-            btn.disabled = true; btn.classList.add('opacity-75'); btnText.innerText = 'Загрузка...';
-
-            try {
-                await fetch(`${API_URL}/proxies-text`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: proxyText }) });
-
-                const zipData = new FormData(); zipData.append('file', zipFile);
-                await fetch(`${API_URL}/upload`, { method: 'POST', body: zipData });
-
-                setTimeout(() => { loadAccounts(); closeImportModal(); btn.disabled = false; btn.classList.remove('opacity-75'); btnText.innerText = 'Запустить проверку'; }, 5000);
+                    `;
+                    list.appendChild(card);
+                });
             } catch (e) {
-                alert('Ошибка: ' + e.message);
-                btn.disabled = false; btn.classList.remove('opacity-75'); btnText.innerText = 'Запустить проверку';
+                console.error("Ошибка загрузки аккаунтов", e);
             }
         }
 
-        async function saveProxy() {
-            const proxyText = document.getElementById('new-proxy-input').value.trim();
-            if (!proxyText) { alert('Введите прокси'); return; }
+        function openImportModal() { document.getElementById('importModal').style.display = 'flex'; }
+        function closeImportModal() { document.getElementById('importModal').style.display = 'none'; }
 
-            const btn = document.getElementById('change-proxy-btn');
-            btn.innerText = 'Сохранение...'; btn.disabled = true;
+        function openPayModal(accId) {
+            document.getElementById('payAccId').value = accId;
+            document.getElementById('payModal').style.display = 'flex';
+        }
+        function closePayModal() { document.getElementById('payModal').style.display = 'none'; }
+
+        async function submitImport() {
+            const proxyText = document.getElementById('proxyInput').value;
+            const zipFile = document.getElementById('zipInput').files[0];
+
+            if (proxyText) {
+                await fetch('/proxies-text', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({text: proxyText})
+                });
+            }
+
+            if (zipFile) {
+                const formData = new FormData();
+                formData.append('file', zipFile);
+                await fetch('/upload', { method: 'POST', body: formData });
+            }
+
+            closeImportModal();
+            setTimeout(loadAccounts, 2000);
+        }
+
+        async function submitPayment() {
+            const accId = document.getElementById('payAccId').value;
+            const card_number = document.getElementById('cardNumber').value;
+            const exp_month = document.getElementById('expMonth').value;
+            const exp_year = document.getElementById('expYear').value;
+            const cvv = document.getElementById('cardCvv').value;
+
+            closePayModal();
+            alert("Запрос на покупку отправлен боту. Ожидайте...");
 
             try {
-                const res = await fetch(`${API_URL}/update-proxy/${currentAccId}`, {
+                const res = await fetch(`/buy-premium/${accId}`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ proxy_text: proxyText })
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({card_number, exp_month, exp_year, cvv})
                 });
                 const data = await res.json();
-                
                 if (data.status === 'ok') {
-                    closeProxyModal();
-                    loadAccounts();
+                    if (data.invoice_url) {
+                        window.open(data.invoice_url, '_blank');
+                    } else {
+                        alert("Успешно: " + data.message);
+                    }
                 } else {
-                    alert(data.message);
+                    alert("Ошибка: " + data.message);
                 }
             } catch (e) {
-                alert('Ошибка: ' + e.message);
-            } finally {
-                btn.innerText = 'Сохранить'; btn.disabled = false;
+                alert("Ошибка запроса сети");
+            }
+        }
+
+        async function openWeb(accId) {
+            alert("Генерируем сессию для веб-версии...");
+            try {
+                const res = await fetch(`/open-web/${accId}`, { method: 'POST' });
+                const data = await res.json();
+                if (data.status === 'ok') {
+                    window.open(data.screenshot, '_blank');
+                } else {
+                    alert("Ошибка: " + data.message);
+                }
+            } catch (e) {
+                alert("Ошибка запроса");
+            }
+        }
+
+        async function deleteAccount(accId) {
+            if (confirm('Удалить аккаунт?')) {
+                await fetch(`/accounts/${accId}`, { method: 'DELETE' });
+                loadAccounts();
             }
         }
 
         loadAccounts();
-        setInterval(loadAccounts, 10000);
+        setInterval(loadAccounts, 5000);
     </script>
 </body>
 </html>
