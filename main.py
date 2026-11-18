@@ -1,4 +1,4 @@
-import os, uuid, time, aiohttp, shutil, sqlite3
+import os, uuid, time, aiohttp, zipfile, sqlite3
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,14 +9,17 @@ from sqlalchemy import create_engine, Column, String, Integer, DateTime, Boolean
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 from telethon import TelegramClient
+from telethon.errors import SessionPasswordNeededError
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 DATA_DIR = Path("/data")
 SESS_DIR = DATA_DIR / "sessions"
+UPLOAD_DIR = Path("/app/uploads")
 STATIC_DIR = Path("/app/static")
 SESS_DIR.mkdir(parents=True, exist_ok=True)
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -102,34 +105,44 @@ async def get_proxy_info(proxy: dict):
         pass
     return {"ip": "N/A", "country": "Неизвестно"}, 0
 
-def is_valid_sqlite(file_path: Path) -> bool:
+def find_local_2fa(session_file_path: Path) -> str:
+    """Ищет файл с 2FA паролем в той же папке, где лежит .session файл"""
     try:
-        if file_path.stat().st_size < 100: return False
-        with open(file_path, "rb") as f:
-            header = f.read(16)
-        return header.startswith(b"SQLite format 3")
+        parent_dir = session_file_path.parent
+        for file in parent_dir.iterdir():
+            name_lower = file.name.lower()
+            if "2fa" in name_lower or "pass" in name_lower:
+                content = file.read_text(encoding="utf-8", errors="ignore").strip()
+                if content and len(content) < 100:
+                    return content
     except Exception:
-        return False
+        pass
+    return None
 
-async def validate_session_file(session_path: str, proxy_dict: dict, acc_id: str):
-    path_obj = Path(session_path)
-    if not is_valid_sqlite(path_obj):
-        return {"status": "error", "error_msg": "Файл не является валидной SQLite сессией (.session)"}
-
+async def validate_and_auth_session(session_path: Path, proxy_dict: dict, acc_id: str):
     p_type = proxy_dict.get('proxy_type', 'http')
     proxy_tuple = (p_type, proxy_dict['addr'], proxy_dict['port'], True, proxy_dict.get('username'), proxy_dict.get('password')) if proxy_dict.get('username') else (p_type, proxy_dict['addr'], proxy_dict['port'])
     
     API_ID = 2040
     API_HASH = "b18441a1ff607e10a989891a5462e627"
 
-    client = TelegramClient(session_path, api_id=API_ID, api_hash=API_HASH, proxy=proxy_tuple)
+    client = TelegramClient(str(session_path), api_id=API_ID, api_hash=API_HASH, proxy=proxy_tuple)
     net_info, ping_ms = await get_proxy_info(proxy_dict)
     
     try:
         await client.connect()
         if not await client.is_user_authorized():
-            await client.disconnect()
-            return {"status": "invalid", "error_msg": "Сессия не авторизована"}
+            # Пробуем авторизовать через найденный 2FA файл в папке, если сессия заблокирована паролем
+            password = find_local_2fa(session_path)
+            if password:
+                try:
+                    await client.sign_in(password=password)
+                except Exception:
+                    pass
+            
+            if not await client.is_user_authorized():
+                await client.disconnect()
+                return {"status": "invalid", "error_msg": "Сессия не авторизована (нужен валидный вход или 2FA)"}
         
         me = await client.get_me()
         avatar_url = None
@@ -155,39 +168,48 @@ async def validate_session_file(session_path: str, proxy_dict: dict, acc_id: str
     except Exception as e:
         return {"status": "error", "error_msg": str(e)}
 
-async def process_session_upload(file_path: str):
+async def process_zip_archive(zip_path: Path):
+    extract_to = UPLOAD_DIR / uuid.uuid4().hex
+    extract_to.mkdir(parents=True, exist_ok=True)
+    
+    with zipfile.ZipFile(zip_path, 'r') as zf:
+        zf.extractall(extract_to)
+    
+    # Ищем все .session файлы во всех вложенных папках архива
+    session_files = list(extract_to.rglob("*.session"))
     db = SessionDB()
-    acc_id = uuid.uuid4().hex
-    session_dest = SESS_DIR / f"{acc_id}.session"
-    
-    shutil.move(file_path, str(session_dest))
 
-    _, proxy_dict = pop_free_proxy(db)
-    if not proxy_dict:
-        db.add(Account(id=acc_id, status="error", error_msg="Нет свободных прокси"))
+    for sf in session_files:
+        acc_id = uuid.uuid4().hex
+        session_dest = SESS_DIR / f"{acc_id}.session"
+        sf.rename(session_dest)
+
+        _, proxy_dict = pop_free_proxy(db)
+        if not proxy_dict:
+            db.add(Account(id=acc_id, status="error", error_msg="Нет свободных прокси в базе"))
+            db.commit()
+            continue
+
+        res = await validate_and_auth_session(session_dest, proxy_dict, acc_id)
+
+        db.add(Account(
+            id=acc_id,
+            user_id=res.get("user_id"),
+            username=res.get("username"),
+            first_name=res.get("first_name"),
+            phone=res.get("phone"),
+            avatar_url=res.get("avatar_url"),
+            proxy=f"{proxy_dict['addr']}:{proxy_dict['port']}",
+            ip=res.get("ip"),
+            ping=res.get("ping"),
+            country=res.get("country"),
+            premium=res.get("premium"),
+            status=res.get("status", "error"),
+            error_msg=res.get("error_msg")
+        ))
         db.commit()
-        db.close()
-        return
-
-    res = await validate_session_file(str(session_dest), proxy_dict, acc_id)
-    
-    db.add(Account(
-        id=acc_id,
-        user_id=res.get("user_id"),
-        username=res.get("username"),
-        first_name=res.get("first_name"),
-        phone=res.get("phone"),
-        avatar_url=res.get("avatar_url"),
-        proxy=f"{proxy_dict['addr']}:{proxy_dict['port']}",
-        ip=res.get("ip"),
-        ping=res.get("ping"),
-        country=res.get("country"),
-        premium=res.get("premium"),
-        status=res.get("status", "error"),
-        error_msg=res.get("error_msg")
-    ))
-    db.commit()
     db.close()
+    if zip_path.exists(): zip_path.unlink()
 
 @app.get("/")
 def root(): return FileResponse("index.html")
@@ -206,9 +228,9 @@ async def upload_proxies_text(data: ProxyList):
 
 @app.post("/upload-session")
 async def upload_session(bg: BackgroundTasks, file: UploadFile = File(...)):
-    tmp_path = SESS_DIR / f"temp_{uuid.uuid4()}.session"
+    tmp_path = UPLOAD_DIR / f"upload_{uuid.uuid4()}.zip"
     tmp_path.write_bytes(await file.read())
-    bg.add_task(process_session_upload, str(tmp_path))
+    bg.add_task(process_zip_archive, tmp_path)
     return {"status": "accepted"}
 
 @app.get("/accounts")
