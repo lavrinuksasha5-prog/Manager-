@@ -137,8 +137,8 @@
         function closeImportModal() { document.getElementById('importModal').style.display = 'none'; }
 
         async function submitImport() {
-            const proxyText = document.getElementById('proxyInput'].value;
-            const zipFile = document.getElementById('zipInput'].files[0];
+            const proxyText = document.getElementById('proxyInput').value;
+            const zipFile = document.getElementById('zipInput').files[0];
 
             if (proxyText) {
                 await fetch('/proxies-text', {
