@@ -69,7 +69,7 @@ class ProxyList(BaseModel):
 class ProxyUpdate(BaseModel):
     proxy_text: str
 
-# --- Парсер прокси (только HTTP) ---
+# --- Надежный парсер прокси (только HTTP с защитой от мусора) ---
 def parse_proxy(line: str):
     line = line.strip().rstrip('/')
     if not line or line.startswith("#"): return None
@@ -77,7 +77,7 @@ def parse_proxy(line: str):
     proxy_type = "http"
     if line.startswith("http://"): line = line.replace("http://", "")
     elif line.startswith("https://"): line = line.replace("https://", "")
-    elif line.startswith("socks"): return None # Игнорируем соксы на всякий случай
+    elif line.startswith("socks"): return None
 
     user = passw = None
     if "@" in line:
@@ -98,7 +98,7 @@ def pop_free_proxy(db):
     if not p: return None, None
     return p, {"proxy_type": p.proxy_type, "addr": p.addr, "port": p.port, "username": p.username, "password": p.password}
 
-# --- Проверка IP и геолокации через HTTP прокси ---
+# --- Проверка IP и геолокации ---
 async def get_proxy_info(proxy: dict):
     COUNTRY_RU = {
         "PT": "Португалия", "TR": "Турция", "RU": "Россия", "US": "США",
@@ -157,28 +157,13 @@ async def validate(tdata_path: str, proxy_dict: dict, acc_id: str):
         api=API.TelegramAndroid.Generate(unique_id=acc_id)
     )
     
-    # Настраиваем HTTP прокси для Telethon
-    if proxy_dict["username"] and proxy_dict["password"]:
-        client._proxy = (
-            import_socks_type := 2, # HTTP type for telethon (or tuple format)
-            proxy_dict["addr"],
-            proxy_dict["port"],
-            True,
-            proxy_dict["username"],
-            proxy_dict["password"]
-        ) if False else {
-            'proxy_type': 'http',
-            'addr': proxy_dict['addr'],
-            'port': proxy_dict['port'],
-            'username': proxy_dict['username'],
-            'password': proxy_dict['password']
-        }
-    else:
-        client._proxy = {
-            'proxy_type': 'http',
-            'addr': proxy_dict['addr'],
-            'port': proxy_dict['port']
-        }
+    client._proxy = {
+        'proxy_type': 'http',
+        'addr': proxy_dict['addr'],
+        'port': proxy_dict['port'],
+        'username': proxy_dict['username'],
+        'password': proxy_dict['password']
+    }
 
     net_info, ping_ms = await get_proxy_info(proxy_dict)
     
@@ -257,7 +242,7 @@ async def upload_proxies_text(data: ProxyList):
 @app.post("/update-proxy/{acc_id}")
 async def update_proxy(acc_id: str, data: ProxyUpdate):
     p = parse_proxy(data.proxy_text)
-    if not p: return {"status": "error", "message": "Неверный формат прокси (только HTTP)"}
+    if not p: return {"status": "error", "message": "Неверный формат прокси"}
 
     proxy_dict = {"proxy_type": "http", "addr": p["addr"], "port": p["port"], "username": p["username"], "password": p["password"]}
     net_info, ping_ms = await get_proxy_info(proxy_dict)
@@ -356,10 +341,8 @@ async def open_web(acc_id: str):
             if proxy_conf:
                 context_args["proxy"] = proxy_conf
 
+            # Создаем контекст браузера без ошибочных вызовов сторонних методов
             context = await browser.new_context(**context_args)
-            
-            if proxy_row and proxy_row.username and proxy_row.password:
-                await context.set_http_credentials(username=proxy_row.username, password=proxy_row.password)
 
             page = await context.new_page()
             await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
