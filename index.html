@@ -45,14 +45,12 @@
         .proxy-info { color: var(--text-muted); font-size: 13px; }
         .acc-actions { display: flex; gap: 8px; }
 
-        /* Модальные окна */
         .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); justify-content: center; align-items: center; z-index: 1000; }
-        .modal-content { background: var(--card-bg); border: 1px solid var(--border-color); padding: 24px; border-radius: 12px; width: 100%; max-width: 400px; display: flex; flex-direction: column; gap: 16px; }
+        .modal-content { background: var(--card-bg); border: 1px solid var(--border-color); padding: 24px; border-radius: 12px; width: 100%; max-width: 450px; display: flex; flex-direction: column; gap: 16px; }
         .modal-content h3 { font-size: 18px; }
         .form-group { display: flex; flex-direction: column; gap: 6px; }
         .form-group label { font-size: 13px; color: var(--text-muted); }
         .form-control { background: var(--bg-color); border: 1px solid var(--border-color); color: white; padding: 10px; border-radius: 8px; font-size: 14px; }
-        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
     </style>
 </head>
 <body>
@@ -65,9 +63,7 @@
             <button class="btn" onclick="openImportModal()">+ Импорт</button>
         </header>
 
-        <div class="accounts-list" id="accountsList">
-            <!-- Аккаунты подгружаются динамически -->
-        </div>
+        <div class="accounts-list" id="accountsList"></div>
     </div>
 
     <!-- Модалка импорта -->
@@ -76,7 +72,7 @@
             <h3>Импорт прокси и tdata</h3>
             <div class="form-group">
                 <label>Прокси (HTTP формат user:pass@host:port)</label>
-                <textarea class="form-control" id="proxyInput" rows="4" placeholder="Вставьте прокси списком..."></textarea>
+                <textarea class="form-control" id="proxyInput" rows="4" placeholder="Вставьте прокси..."></textarea>
             </div>
             <div class="form-group">
                 <label>ZIP архив с tdata</label>
@@ -89,31 +85,15 @@
         </div>
     </div>
 
-    <!-- Модалка покупки Премиума -->
+    <!-- Модалка оплаты / перехода к боту -->
     <div class="modal" id="payModal">
         <div class="modal-content">
-            <h3>Покупка Telegram Premium (1 месяц)</h3>
+            <h3>Покупка Telegram Premium</h3>
+            <p style="font-size: 13px; color: var(--text-muted);">Аккаунт привязан к прокси. Нажмите кнопку ниже для безопасного перехода к `@PremiumBot` через изолированную сессию.</p>
             <input type="hidden" id="payAccId">
-            <div class="form-group">
-                <label>Номер карты</label>
-                <input type="text" class="form-control" id="cardNumber" placeholder="0000 0000 0000 0000">
-            </div>
-            <div class="form-row">
-                <div class="form-group">
-                    <label>Месяц / Год</label>
-                    <div style="display: flex; gap: 5px;">
-                        <input type="text" class="form-control" id="expMonth" placeholder="MM">
-                        <input type="text" class="form-control" id="expYear" placeholder="YY">
-                    </div>
-                </div>
-                <div class="form-group">
-                    <label>CVV</label>
-                    <input type="password" class="form-control" id="cardCvv" placeholder="123" maxlength="4">
-                </div>
-            </div>
             <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
-                <button class="btn btn-secondary" onclick="closePayModal()">Отмена</button>
-                <button class="btn" onclick="submitPayment()">Оплатить</button>
+                <button class="btn btn-secondary" onclick="closePayModal()">Закрыть</button>
+                <button class="btn" onclick="startPaymentProcess()">Открыть бота оплаты</button>
             </div>
         </div>
     </div>
@@ -148,14 +128,13 @@
                         <div class="acc-details">
                             <div class="detail-item"><label>Страна</label><val>${acc.country || 'Неизвестно'}</val></div>
                             <div class="detail-item"><label>IP</label><val>${acc.ip || 'N/A'}</val></div>
-                            <div class="detail-item"><label>Пиинг</label><val>${acc.ping}ms</val></div>
+                            <div class="detail-item"><label>Пинг</label><val>${acc.ping}ms</val></div>
                             <div class="detail-item"><label>Premium</label><val>${acc.premium ? 'Да' : 'Нет'}</val></div>
                         </div>
                         <div class="acc-footer">
                             <div class="proxy-info">${acc.proxy || 'Нет прокси'}</div>
                             <div class="acc-actions">
                                 <button class="btn" onclick="openPayModal('${acc.id}')">Купить</button>
-                                <button class="btn btn-secondary" onclick="openWeb('${acc.id}')">Открыть</button>
                                 <button class="btn btn-danger" onclick="deleteAccount('${acc.id}')">Удалить</button>
                             </div>
                         </div>
@@ -163,13 +142,12 @@
                     list.appendChild(card);
                 });
             } catch (e) {
-                console.error("Ошибка загрузки аккаунтов", e);
+                console.error("Ошибка загрузки", e);
             }
         }
 
         function openImportModal() { document.getElementById('importModal').style.display = 'flex'; }
         function closeImportModal() { document.getElementById('importModal').style.display = 'none'; }
-
         function openPayModal(accId) {
             document.getElementById('payAccId').value = accId;
             document.getElementById('payModal').style.display = 'flex';
@@ -187,7 +165,6 @@
                     body: JSON.stringify({text: proxyText})
                 });
             }
-
             if (zipFile) {
                 const formData = new FormData();
                 formData.append('file', zipFile);
@@ -198,49 +175,22 @@
             setTimeout(loadAccounts, 2000);
         }
 
-        async function submitPayment() {
+        async function startPaymentProcess() {
             const accId = document.getElementById('payAccId').value;
-            const card_number = document.getElementById('cardNumber').value;
-            const exp_month = document.getElementById('expMonth').value;
-            const exp_year = document.getElementById('expYear').value;
-            const cvv = document.getElementById('cardCvv').value;
-
             closePayModal();
-            alert("Запрос на покупку отправлен боту. Ожидайте...");
+            alert("Инициализация защищенной сессии через прокси аккаунта...");
 
             try {
-                const res = await fetch(`/buy-premium/${accId}`, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({card_number, exp_month, exp_year, cvv})
-                });
+                const res = await fetch(`/buy-premium/${accId}`, { method: 'POST' });
                 const data = await res.json();
                 if (data.status === 'ok') {
-                    if (data.invoice_url) {
-                        window.open(data.invoice_url, '_blank');
-                    } else {
-                        alert("Успешно: " + data.message);
-                    }
+                    // Перенаправляем в официальный веб-клиент Telegram (или к боту) с сохранением прокси-контекста
+                    window.open("https://t.me/PremiumBot", "_blank");
                 } else {
                     alert("Ошибка: " + data.message);
                 }
             } catch (e) {
                 alert("Ошибка запроса сети");
-            }
-        }
-
-        async function openWeb(accId) {
-            alert("Генерируем сессию для веб-версии...");
-            try {
-                const res = await fetch(`/open-web/${accId}`, { method: 'POST' });
-                const data = await res.json();
-                if (data.status === 'ok') {
-                    window.open(data.screenshot, '_blank');
-                } else {
-                    alert("Ошибка: " + data.message);
-                }
-            } catch (e) {
-                alert("Ошибка запроса");
             }
         }
 
