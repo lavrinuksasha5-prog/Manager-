@@ -1,4 +1,4 @@
-import os, uuid, zipfile, traceback, asyncio
+import os, uuid, zipfile, traceback, asyncio, time
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,6 +13,7 @@ from opentele2.api import API, UseCurrentSession
 from playwright.async_api import async_playwright
 import aiohttp
 from aiohttp_socks import ProxyConnector
+from telethon import TelegramClient
 
 # --- Конфиг ---
 DATA_DIR = Path("/data")
@@ -26,7 +27,7 @@ STATIC_DIR.mkdir(parents=True, exist_ok=True)
 # --- БД ---
 db_file = DATA_DIR / "twks.db"
 if db_file.exists():
-    db_file.unlink() # Пересоздаем базу с новыми колонками
+    db_file.unlink() # Удаляем старую базу при старте (смена схемы)
 
 engine = create_engine(f"sqlite:///{db_file}")
 Base = declarative_base()
@@ -37,9 +38,9 @@ class Account(Base):
     id = Column(String, primary_key=True)
     user_id = Column(Integer)
     username = Column(String, nullable=True)
-    first_name = Column(String, nullable=True) # НОВОЕ
+    first_name = Column(String, nullable=True)
     phone = Column(String, nullable=True)
-    avatar_url = Column(String, nullable=True) # НОВОЕ
+    avatar_url = Column(String, nullable=True)
     device = Column(String)
     proxy = Column(String)
     proxy_country = Column(String, nullable=True)
@@ -91,28 +92,40 @@ def pop_free_proxy(db):
     if not p: return None, None
     return p, {"proxy_type": p.proxy_type, "addr": p.addr, "port": p.port, "username": p.username, "password": p.password}
 
-# --- Проверка IP через прокси (с реальными данными) ---
+# --- Проверка IP и геолокации ---
 async def get_proxy_info(proxy: dict):
-    # Формируем URL прокси
+    COUNTRY_RU = {
+        "PT": "Португалия", "TR": "Турция", "RU": "Россия", "US": "США",
+        "DE": "Германия", "GB": "Великобритания", "NL": "Нидерланды",
+        "FR": "Франция", "UA": "Украина", "KZ": "Казахстан", "PL": "Польша",
+        "ES": "Испания", "IT": "Италия", "CA": "Канада", "BR": "Бразилия",
+        "IN": "Индия", "ID": "Индонезия", "VN": "Вьетнам", "AE": "ОАЭ",
+    }
+    
     if proxy["username"] and proxy["password"]:
         proxy_url = f"{proxy['proxy_type']}://{proxy['username']}:{proxy['password']}@{proxy['addr']}:{proxy['port']}"
     else:
         proxy_url = f"{proxy['proxy_type']}://{proxy['addr']}:{proxy['port']}"
 
+    start_time = time.time()
     try:
         connector = ProxyConnector.from_url(proxy_url)
         async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=5)) as session:
             async with session.get("http://ip-api.com/json/?fields=status,country,countryCode,query") as response:
                 data = await response.json()
+                ping = int((time.time() - start_time) * 1000)
+                
                 if data.get("status") == "success":
+                    code = data.get("countryCode")
                     return {
                         "ip": data.get("query"),
-                        "country_code": data.get("countryCode"),
-                        "country": data.get("country") # Можно добавить перевод на русский через словарь
-                    }
+                        "country_code": code,
+                        "country": COUNTRY_RU.get(code, data.get("country"))
+                    }, ping
     except Exception as e:
         print(f"[WARN] Ошибка проверки IP: {e}")
-    return {"ip": "N/A", "country_code": "UN", "country": "Неизвестно"}
+    
+    return {"ip": "N/A", "country_code": "UN", "country": "Неизвестно"}, 0
 
 # --- tdata парсер ---
 def extract_tdata(zip_path: str) -> list:
@@ -139,8 +152,7 @@ async def validate(tdata_path: str, proxy_dict: dict, acc_id: str):
     )
     client._proxy = proxy_dict
 
-    # Проверяем IP
-    net_info = await get_proxy_info(proxy_dict)
+    net_info, ping_ms = await get_proxy_info(proxy_dict)
     
     await client.connect()
     try:
@@ -149,7 +161,7 @@ async def validate(tdata_path: str, proxy_dict: dict, acc_id: str):
         
         me = await client.get_me()
         
-        # Скачиваем аватарку
+        # Скачиваем аватарку, если есть
         avatar_url = None
         if me.photo:
             avatar_path = STATIC_DIR / f"avatar_{acc_id}.jpg"
@@ -161,7 +173,7 @@ async def validate(tdata_path: str, proxy_dict: dict, acc_id: str):
             "first_name": me.first_name, "phone": me.phone,
             "avatar_url": avatar_url, "device": "android_9.6.0",
             "country": net_info["country"], "country_code": net_info["country_code"],
-            "proxy_country": net_info["country"], "ip": net_info["ip"], "ping": 50, # Пинг можно замерить чуть позже
+            "proxy_country": net_info["country"], "ip": net_info["ip"], "ping": ping_ms,
             "premium": getattr(me, "premium", False), "error_msg": None
         }
     finally:
@@ -245,23 +257,51 @@ def delete_account(acc_id: str):
 async def open_web(acc_id: str):
     db = SessionDB()
     acc = db.query(Account).filter_by(id=acc_id).first()
+    proxy_row = db.query(Proxy).first()
     db.close()
+    
     if not acc: return {"status": "error", "message": "Аккаунт не найден"}
 
+    # 1. Достаем ключи из сессии
+    session_file = SESS_DIR / f"{acc_id}.session"
+    if not session_file.exists():
+        return {"status": "error", "message": "Файл сессии не найден"}
+
+    client = TelegramClient(str(session_file), 2040, "b18441a1ff607e10a989891a5462e627")
+    await client.connect()
+    auth_key = client.session.auth_key.key.hex()
+    dc_id = client.session.dc_id
+    await client.disconnect()
+
     screenshot_path = STATIC_DIR / f"web_{acc_id}.png"
+    
+    # 2. Настраиваем прокси
     proxy_conf = None
-    if acc.proxy and acc.proxy != "direct":
-        host, port = acc.proxy.split(":")
-        proxy_conf = {"server": f"http://{host}:{port}"}
+    if proxy_row:
+        proxy_conf = {"server": f"socks5://{proxy_row.addr}:{proxy_row.port}"}
+        if proxy_row.username and proxy_row.password:
+            proxy_conf["username"] = proxy_row.username
+            proxy_conf["password"] = proxy_row.password
 
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(proxy=proxy_conf)
             page = await context.new_page()
-            await page.goto("https://web.telegram.org/k/", wait_until="networkidle")
+            
+            # 3. Инжект ключей
+            await page.goto("https://web.telegram.org/k/", wait_until="domcontentloaded")
+            await page.evaluate(f"""
+                localStorage.setItem('dc{dc_id}_auth_key', '{auth_key}');
+                localStorage.setItem('user_auth', JSON.stringify({{ dcID: {dc_id}, id: '{acc.user_id}' }}));
+            """)
+            
+            # 4. Перезагрузка для входа
+            await page.reload(wait_until="networkidle", timeout=60000)
+            
             await page.screenshot(path=str(screenshot_path))
             await browser.close()
             return {"status": "ok", "screenshot": f"/static/web_{acc_id}.png"}
     except Exception as e:
+        print(f"[ERR] Web Error: {e}")
         return {"status": "error", "message": str(e)}
