@@ -1,4 +1,4 @@
-import os, uuid, zipfile, time, random, asyncio, sqlite3, socks
+import os, uuid, zipfile, time, random, asyncio, sqlite3
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -150,14 +150,26 @@ def extract_tdata(zip_path: str) -> list:
                 found_paths.append(str(p))
     return found_paths
 
-def get_safe_proxy_tuple(proxy_str: str):
+def get_telethon_proxy(proxy_str: str):
+    """Возвращает стандартный словарь прокси, поддерживаемый Telethon без ошибок"""
     p_parts = proxy_str.split(":")
     addr = p_parts[0]
     port = int(p_parts[1])
-    s_type = socks.SOCKS5 if "socks5" in proxy_str.lower() else socks.HTTP
+    p_type = "socks5" if "socks5" in proxy_str.lower() else "http"
+    
     if len(p_parts) >= 4:
-        return (s_type, addr, port, True, p_parts[2], p_parts[3])
-    return (s_type, addr, port)
+        return {
+            'proxy_type': p_type,
+            'addr': addr,
+            'port': port,
+            'username': p_parts[2],
+            'password': p_parts[3]
+        }
+    return {
+        'proxy_type': p_type,
+        'addr': addr,
+        'port': port
+    }
 
 async def validate_tdata_base(tdata_path: str, proxy_dict: dict, acc_id: str):
     temp_session = SESS_DIR / f"{acc_id}_temp.session"
@@ -167,10 +179,13 @@ async def validate_tdata_base(tdata_path: str, proxy_dict: dict, acc_id: str):
         tdesk = TDesktop(real_path)
         client = await tdesk.ToTelethon(str(temp_session), UseCurrentSession)
         
-        if proxy_dict.get('username'):
-            client.proxy = (socks.HTTP, proxy_dict['addr'], proxy_dict['port'], True, proxy_dict['username'], proxy_dict['password'])
-        else:
-            client.proxy = (socks.HTTP, proxy_dict['addr'], proxy_dict['port'])
+        client.proxy = {
+            'proxy_type': proxy_dict.get('proxy_type', 'http'),
+            'addr': proxy_dict['addr'],
+            'port': proxy_dict['port'],
+            'username': proxy_dict.get('username'),
+            'password': proxy_dict.get('password')
+        }
 
         net_info, ping_ms = await get_proxy_info(proxy_dict)
         await client.connect()
@@ -198,7 +213,7 @@ async def validate_tdata_base(tdata_path: str, proxy_dict: dict, acc_id: str):
         if temp_session.exists(): temp_session.unlink()
 
 def find_2fa_password(tdata_path: str) -> str:
-    """Ищет 2FA пароль в папках и файлах 2fa, 2FA, pass или configuration"""
+    """Ищет 2FA пароль в папках и файлах tdata"""
     try:
         base_path = Path(locate_real_tdata(tdata_path))
         for path in base_path.parent.rglob("*"):
@@ -227,7 +242,7 @@ async def login_and_create_session(acc_id: str):
         return JSONResponse({"error": "Аккаунт или tdata не найдены"}, status_code=404)
 
     tdata_path = locate_real_tdata(acc.tdata_path)
-    proxy_tuple = get_safe_proxy_tuple(acc.proxy)
+    proxy_dict = get_telethon_proxy(acc.proxy)
 
     old_session_file = SESS_DIR / f"{acc_id}_old.session"
     new_session_file = SESS_DIR / f"{acc_id}.session"
@@ -238,7 +253,7 @@ async def login_and_create_session(acc_id: str):
         # 1. Подключаем старый клиент для чтения 777000
         tdesk = TDesktop(tdata_path)
         old_client = await tdesk.ToTelethon(str(old_session_file), UseCurrentSession)
-        old_client.proxy = proxy_tuple
+        old_client.proxy = proxy_dict
         await old_client.connect()
 
         if not await old_client.is_user_authorized():
@@ -249,7 +264,12 @@ async def login_and_create_session(acc_id: str):
 
         # 2. Создаем новый клиент с фингерпринтом Android для полноценной новой авторизации
         chosen_api = API.TelegramAndroid.Generate(unique_id=acc_id)
-        new_client = TelegramClient(str(new_session_file), api_id=chosen_api.api_id, api_hash=chosen_api.api_hash, proxy=proxy_tuple)
+        new_client = TelegramClient(
+            str(new_session_file), 
+            api_id=chosen_api.api_id, 
+            api_hash=chosen_api.api_hash, 
+            proxy=proxy_dict
+        )
         new_client.device_model = chosen_api.device_model
         new_client.system_version = chosen_api.system_version
         new_client.app_version = chosen_api.app_version
