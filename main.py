@@ -21,7 +21,7 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 # --- БД ---
 db_file = DATA_DIR / "twks.db"
 if db_file.exists():
-    db_file.unlink() # Удаляем старую базу, чтобы обновились колонки
+    db_file.unlink() # Удаляем старую базу при старте, чтобы обновить схему (добавили новые колонки)
 
 engine = create_engine(f"sqlite:///{db_file}")
 Base = declarative_base()
@@ -54,7 +54,6 @@ class Proxy(Base):
     username = Column(String, nullable=True)
     password = Column(String, nullable=True)
     proxy_type = Column(String)
-    busy = Column(Integer, default=0)
 
 Base.metadata.create_all(engine)
 
@@ -82,11 +81,9 @@ def parse_proxy(line: str):
     return {"proxy_type": proxy_type, "addr": host, "port": int(port), "username": user, "password": passw}
 
 def pop_free_proxy(db):
-    p = db.query(Proxy).filter_by(busy=0).first()
-    if not p: return None
-    p.busy = 1
-    db.commit()
-    # Возвращаем и объект словаря, и сам объект модели для возможности освобождения
+    # Берем прокси без блокировки (для ротационных прокси один URL на всех)
+    p = db.query(Proxy).first()
+    if not p: return None, None
     return p, {"proxy_type": p.proxy_type, "addr": p.addr, "port": p.port, "username": p.username, "password": p.password}
 
 # --- tdata парсер ---
@@ -107,7 +104,7 @@ async def validate(tdata_path: str, proxy_dict: dict, acc_id: str):
     session_file = SESS_DIR / f"{acc_id}.session"
     
     if session_file.exists():
-        session_file.unlink() # Удаляем старую сессию, если есть
+        session_file.unlink()
 
     client = await tdesk.ToTelethon(
         str(session_file), 
@@ -119,7 +116,7 @@ async def validate(tdata_path: str, proxy_dict: dict, acc_id: str):
     await client.connect()
     try:
         if not await client.is_user_authorized():
-            return {"status": "invalid", "error_msg": "Сессия не авторизована"}
+            return {"status": "invalid", "error_msg": "Сессия не авторизована (бан/слет)"}
         me = await client.get_me()
         
         is_premium = getattr(me, "premium", False)
@@ -153,21 +150,17 @@ async def process_zip(zip_path: str):
 
     for td in dirs:
         acc_id = str(uuid.uuid4())
-        proxy_obj, proxy_dict = pop_free_proxy(db) or (None, None)
+        proxy_obj, proxy_dict = pop_free_proxy(db)
         
         if not proxy_dict:
-            db.add(Account(id=acc_id, status="error", error_msg="Прокси кончились"))
+            db.add(Account(id=acc_id, status="error", error_msg="Нет прокси в базе. Загрузите прокси перед импортом."))
             db.commit(); continue
 
         try:
             res = await validate(td, proxy_dict, acc_id)
             
-            # Проверка на дубли
             if res.get("phone") and res["phone"] in existing_phones:
-                print(f"[WARN] Дубль {res['phone']} — прокси освобожден")
-                proxy_obj.busy = 0 
-                db.commit()
-                continue
+                continue # Пропускаем дубли
 
             if res.get("phone"):
                 existing_phones.add(res["phone"])
@@ -181,8 +174,6 @@ async def process_zip(zip_path: str):
                 premium=res.get("premium"), status=res["status"], error_msg=res.get("error_msg")
             ))
         except Exception as e:
-            # При любой ошибке освобождаем прокси
-            if proxy_obj: proxy_obj.busy = 0
             db.add(Account(id=acc_id, status="error", proxy="direct", error_msg=str(e)))
         db.commit()
     db.close()
@@ -224,3 +215,14 @@ def delete_account(acc_id: str):
     db.query(Account).filter_by(id=acc_id).delete()
     db.commit(); db.close()
     return {"status": "deleted"}
+
+# --- Заглушки для кнопок (сюда потом добавим Playwright) ---
+@app.post("/open-web/{acc_id}")
+def open_web(acc_id: str):
+    print(f"[ACTION] Открытие Web для {acc_id}")
+    return {"status": "ok", "message": "Web opener triggered"}
+
+@app.post("/buy-premium/{acc_id}")
+def buy_premium(acc_id: str):
+    print(f"[ACTION] Покупка Premium для {acc_id}")
+    return {"status": "ok", "message": "Premium purchase triggered"}
