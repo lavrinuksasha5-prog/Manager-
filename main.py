@@ -262,7 +262,7 @@ async def open_telegram_client(acc_id: str):
     except Exception as e:
         return f"<h3>Ошибка чтения сессии: {str(e)}</h3>"
 
-    html_content = f"""
+    html_content = """
     <!DOCTYPE html>
     <html lang="ru">
     <head>
@@ -270,11 +270,11 @@ async def open_telegram_client(acc_id: str):
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <title>Telegram Web Client</title>
         <style>
-            body, html {{ margin: 0; padding: 0; width: 100%; height: 100%; background: #0b0e14; overflow: hidden; }}
-            #loader {{ position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #0b0e14; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 9999; color: #fff; font-family: sans-serif; }}
-            .spinner {{ width: 48px; height: 48px; border: 4px solid #3b82f6; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }}
-            @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
-            iframe {{ width: 100%; height: 100%; border: none; display: none; }}
+            body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #0b0e14; overflow: hidden; }
+            #loader { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #0b0e14; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 9999; color: #fff; font-family: sans-serif; }
+            .spinner { width: 48px; height: 48px; border: 4px solid #3b82f6; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
+            @keyframes spin { to { transform: rotate(360deg); } }
+            iframe { width: 100%; height: 100%; border: none; display: none; }
         </style>
     </head>
     <body>
@@ -284,55 +284,60 @@ async def open_telegram_client(acc_id: str):
         </div>
 
         <script>
-            const dcId = {dc_id};
-            const authKeyHex = "{auth_key}";
-            const userId = {user_id};
+            const dcId = DC_ID_PLACEHOLDER;
+            const authKeyHex = "AUTH_KEY_PLACEHOLDER";
+            const userId = USER_ID_PLACEHOLDER;
 
-            function hexToBytes(hex) {{
+            function hexToBytes(hex) {
                 let bytes = new Uint8Array(hex.length / 2);
-                for (let i = 0; i < hex.length; i += 2) {{
+                for (let i = 0; i < hex.length; i += 2) {
                     bytes[i/2] = parseInt(hex.substr(i, 2), 16);
-                }}
+                }
                 return bytes;
-            }}
+            }
 
-            try {{
+            try {
                 const request = indexedDB.open('tt-data', 1);
                 
-                request.onupgradeneeded = function(e) {{
+                request.onupgradeneeded = function(e) {
                     const db = e.target.result;
-                    if (!db.objectStoreNames.contains('local-storage')) {{
+                    if (!db.objectStoreNames.contains('local-storage')) {
                         db.createObjectStore('local-storage');
-                    }}
-                }};
+                    }
+                };
 
-                request.onsuccess = function(e) {{
+                request.onsuccess = function(e) {
                     const db = e.target.result;
                     const tx = db.transaction(['local-storage'], 'readwrite');
                     const store = tx.objectStore('local-storage');
                     
                     store.put(JSON.stringify(Array.from(hexToBytes(authKeyHex))), 'dc' + dcId + '_auth_key');
-                    store.put(JSON.stringify({{ dcID: dcId, id: userId }}), 'user_auth');
+                    store.put(JSON.stringify({ dcID: dcId, id: userId }), 'user_auth');
 
-                    tx.oncomplete = function() {{
+                    tx.oncomplete = function() {
                         document.getElementById('loader').style.display = 'none';
                         const iframe = document.createElement('iframe');
                         iframe.src = "https://web.telegram.org/k/";
                         iframe.style.display = 'block';
                         document.body.appendChild(iframe);
-                    }};
+                    };
                 };
 
-                request.onerror = function() {{
-                    document.getElementById('loader').innerHTML = "<h3 style='color:#ef4444'>Ошибка базы данных IndexedDB</h3>";
-                }};
-            } catch (err) {{
+                request.onerror = function() {
+                    document.getElementById('loader').innerHTML = "<h3 style='color:#ef4444'>Ошибка IndexedDB</h3>";
+                };
+            } catch (err) {
                 document.getElementById('loader').innerHTML = "<h3 style='color:#ef4444'>Ошибка: " + err.message + "</h3>";
-            }}
+            }
         </script>
     </body>
     </html>
     """
+
+    html_content = html_content.replace("DC_ID_PLACEHOLDER", str(dc_id))
+    html_content = html_content.replace("AUTH_KEY_PLACEHOLDER", auth_key)
+    html_content = html_content.replace("USER_ID_PLACEHOLDER", str(user_id))
+
     return html_content
 
 if __name__ == "__main__":
