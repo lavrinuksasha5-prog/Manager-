@@ -248,7 +248,7 @@ def delete_account(acc_id: str):
     db.commit(); db.close()
     return {"status": "deleted"}
 
-# --- Клиентский шлюз ---
+# --- Клиентский шлюз с обходом черного экрана ---
 @app.get("/client/{acc_id}", response_class=HTMLResponse)
 async def open_telegram_client(acc_id: str):
     db = SessionDB()
@@ -276,20 +276,17 @@ async def open_telegram_client(acc_id: str):
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-        <title>TWKS Telegram Client</title>
+        <title>TWKS Client Gateway</title>
         <style>
-            body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #0b0e14; overflow: hidden; }
-            #loader { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #0b0e14; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 9999; color: #fff; font-family: sans-serif; }
+            body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #0b0e14; color: #fff; font-family: sans-serif; display: flex; justify-content: center; align-items: center; flex-direction: column; }
             .spinner { width: 48px; height: 48px; border: 4px solid #3b82f6; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
             @keyframes spin { to { transform: rotate(360deg); } }
-            iframe { width: 100%; height: 100%; border: none; }
+            h2 { font-size: 16px; margin-top: 15px; font-weight: 500; }
         </style>
     </head>
     <body>
-        <div id="loader">
-            <div class="spinner"></div>
-            <h2 style="margin-top: 15px; font-weight: 500; font-size: 15px;">Инициализация сессии...</h2>
-        </div>
+        <div class="spinner"></div>
+        <h2>Открытие сессии...</h2>
 
         <script>
             const dcId = DC_ID_PLACEHOLDER;
@@ -305,36 +302,26 @@ async def open_telegram_client(acc_id: str):
             }
 
             try {
-                const request = indexedDB.open('tt-data', 1);
+                // Создаем форму для отправки токена автологина на официальный обработчик
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.action = 'https://web.telegram.org/k/';
                 
-                request.onupgradeneeded = function(e) {
-                    const db = e.target.result;
-                    if (!db.objectStoreNames.contains('local-storage')) {
-                        db.createObjectStore('local-storage');
-                    }
-                };
-
-                request.onsuccess = function(e) {
+                // Записываем данные сессии в localStorage перед редиректом через брандмауэр
+                const request = indexedDB.open('tt-data', 1);
+                request.onupgradeneeded = e => e.target.result.createObjectStore('local-storage');
+                request.onsuccess = e => {
                     const db = e.target.result;
                     const tx = db.transaction(['local-storage'], 'readwrite');
                     const store = tx.objectStore('local-storage');
-                    
                     store.put(JSON.stringify(Array.from(hexToBytes(authKeyHex))), 'dc' + dcId + '_auth_key');
                     store.put(JSON.stringify({ dcID: dcId, id: userId }), 'user_auth');
-
-                    tx.oncomplete = function() {
-                        document.getElementById('loader').style.display = 'none';
-                        const iframe = document.createElement('iframe');
-                        iframe.src = "https://web.telegram.org/k/";
-                        document.body.appendChild(iframe);
+                    tx.oncomplete = () => {
+                        window.location.href = "https://web.telegram.org/k/#@s";
                     };
                 };
-
-                request.onerror = function() {
-                    document.getElementById('loader').innerHTML = "<h3 style='color:#ef4444'>Ошибка IndexedDB</h3>";
-                }
             } catch (err) {
-                document.getElementById('loader').innerHTML = "<h3 style='color:#ef4444'>Ошибка: " + err.message + "</h3>";
+                document.body.innerHTML = "<h3 style='color:#ef4444'>Ошибка авторизации</h3>";
             }
         </script>
     </body>
