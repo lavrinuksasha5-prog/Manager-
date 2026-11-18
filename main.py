@@ -10,7 +10,6 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 from opentele2.td import TDesktop
 from opentele2.api import API, UseCurrentSession
-from playwright.async_api import async_playwright
 import aiohttp
 from telethon import TelegramClient
 
@@ -73,6 +72,12 @@ class ProxyList(BaseModel):
 
 class ProxyUpdate(BaseModel):
     proxy_text: str
+
+class PaymentData(BaseModel):
+    card_number: str
+    exp_month: str
+    exp_year: str
+    cvv: str
 
 # --- Надежный парсер прокси (только HTTP с защитой от мусора) ---
 def parse_proxy(line: str):
@@ -286,8 +291,9 @@ def delete_account(acc_id: str):
     db.commit(); db.close()
     return {"status": "deleted"}
 
-@app.post("/open-web/{acc_id}")
-async def open_web(acc_id: str):
+# --- Эндпоинт покупки премиума через Telethon (без тяжелого браузера) ---
+@app.post("/buy-premium/{acc_id}")
+async def buy_premium(acc_id: str, data: PaymentData):
     db = SessionDB()
     acc = db.query(Account).filter_by(id=acc_id).first()
     if not acc: 
@@ -306,75 +312,60 @@ async def open_web(acc_id: str):
     if not session_file.exists(): 
         return {"status": "error", "message": "Файл сессии не найден"}
 
-    client = TelegramClient(str(session_file), 2040, "b18441a1ff607e10a989891a5462e627")
-    await client.connect()
-    auth_key = client.session.auth_key.key.hex()
-    dc_id = client.session.dc_id
-    await client.disconnect()
-
-    screenshot_path = STATIC_DIR / f"web_{acc_id}.png"
-
-    GEO_CONFIGS = {
-        "PT": {"locale": "pt-PT", "timezone": "Europe/Lisbon"},
-        "DE": {"locale": "de-DE", "timezone": "Europe/Berlin"},
-        "US": {"locale": "en-US", "timezone": "America/New_York"},
-        "GB": {"locale": "en-GB", "timezone": "Europe/London"},
-        "PL": {"locale": "pl-PL", "timezone": "Europe/Warsaw"},
-        "FR": {"locale": "fr-FR", "timezone": "Europe/Paris"},
-        "NL": {"locale": "nl-NL", "timezone": "Europe/Amsterdam"},
-        "ES": {"locale": "es-ES", "timezone": "Europe/Madrid"},
-        "TR": {"locale": "tr-TR", "timezone": "Europe/Istanbul"},
-    }
-    geo = GEO_CONFIGS.get(acc.country_code, {"locale": "en-US", "timezone": "UTC"})
-
-    proxy_conf = None
+    proxy_dict = None
     if p_row:
-        if p_row.username and p_row.password:
-            proxy_conf = {
-                "server": f"http://{p_row.addr}:{p_row.port}",
-                "username": p_row.username,
-                "password": p_row.password
-            }
-        else:
-            proxy_conf = {"server": f"http://{p_row.addr}:{p_row.port}"}
+        proxy_dict = {
+            'proxy_type': 'http',
+            'addr': p_row.addr,
+            'port': p_row.port,
+            'username': p_row.username,
+            'password': p_row.password
+        }
 
     try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            
-            context_args = {
-                "viewport": {"width": 1280, "height": 900},
-                "locale": geo["locale"],
-                "timezone_id": geo["timezone"],
-                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        client = TelegramClient(str(session_file), 2040, "b18441a1ff607e10a989891a5462e627")
+        if proxy_dict:
+            client._proxy = proxy_dict
+
+        await client.connect()
+        if not await client.is_user_authorized():
+            await client.disconnect()
+            return {"status": "error", "message": "Сессия не авторизована"}
+
+        # Обращаемся к официальному боту @PremiumBot для заказа подписки на 1 месяц
+        bot_entity = await client.get_entity("@PremiumBot")
+        
+        # Отправляем команду /start или запрашиваем инвойс
+        await client.send_message(bot_entity, "/start")
+        await asyncio.sleep(2)
+
+        # Получаем последние сообщения от бота для поиска инлайн-кнопки покупки
+        messages = await client.get_messages(bot_entity, limit=5)
+        invoice_url = None
+        
+        for msg in messages:
+            if msg.reply_markup and hasattr(msg.reply_markup, 'rows'):
+                for row in msg.reply_markup.rows:
+                    for button in row.buttons:
+                        # Ищем кнопку оплаты или перехода к инвойсу
+                        if hasattr(button, 'url') and button.url:
+                            invoice_url = button.url
+                            break
+
+        await client.disconnect()
+
+        if invoice_url:
+            return {
+                "status": "ok", 
+                "message": "Ссылка на оплату получена", 
+                "invoice_url": invoice_url
             }
-            if proxy_conf:
-                context_args["proxy"] = proxy_conf
+        else:
+            return {
+                "status": "error", 
+                "message": "Не удалось автоматически получить инвойс от бота. Требуется ручной выбор."
+            }
 
-            context = await browser.new_context(**context_args)
-            page = await context.new_page()
-            
-            # Скрываем автоматизацию от антифрода
-            await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
-
-            # 1. Сначала открываем пустую страницу домена, чтобы зафиксировать localStorage
-            await page.goto("https://web.telegram.org/k/", wait_until="commit", timeout=60000)
-            
-            # 2. Инъецируем ключи авторизации напрямую в хранилище
-            await page.evaluate(f"""
-                localStorage.setItem('dc{dc_id}_auth_key', '{auth_key}');
-                localStorage.setItem('user_auth', JSON.stringify({{ dcID: {dc_id}, id: '{acc.user_id}' }}));
-            """)
-            
-            # 3. Перезагружаем для инициализации клиента с уже готовыми ключами
-            await page.reload(wait_until="domcontentloaded", timeout=60000)
-            
-            # 4. Даем время на стабильную прорисовку чатов через прокси
-            await asyncio.sleep(5)
-            
-            await page.screenshot(path=str(screenshot_path), full_page=False)
-            await browser.close()
-            return {"status": "ok", "screenshot": f"/static/web_{acc_id}.png"}
     except Exception as e:
-        print(f"[ERROR] Ошибка в open_web для {acc_id}: {str(e)}")
-        return {"status": "error", "message": "Ошибка запроса"}
+        print(f"[ERROR Buy Premium] {str(e)}")
+        return {"status": "error", "message": f"Ошибка транзакции: {str(e)}"}
