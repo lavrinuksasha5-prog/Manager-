@@ -4,6 +4,7 @@ from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, String, Integer, DateTime
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
@@ -54,6 +55,10 @@ class Proxy(Base):
     busy = Column(Integer, default=0)
 
 Base.metadata.create_all(engine)
+
+# --- Модель для текстовых прокси ---
+class ProxyList(BaseModel):
+    text: str
 
 # --- Парсер прокси (все форматы) ---
 def parse_proxy(line: str):
@@ -160,8 +165,6 @@ async def validate(tdata_path: str, proxy: dict, acc_id: str):
 # --- API ---
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-
-# Подключаем папку со статикой (если понадобится для картинок/JS отдельно)
 app.mount("/static", StaticFiles(directory="."), name="static")
 
 async def process_zip(zip_path: str):
@@ -189,7 +192,6 @@ async def process_zip(zip_path: str):
 
 @app.get("/")
 def root():
-    # Отдаем фронтенд на главной
     return FileResponse("index.html")
 
 @app.post("/proxies")
@@ -198,6 +200,26 @@ async def upload_proxies(file: UploadFile = File(...)):
     db = SessionDB()
     added = 0
     for line in content.splitlines():
+        p = parse_proxy(line)
+        if p:
+            db.add(Proxy(
+                raw=line.strip(),
+                addr=p["addr"],
+                port=p["port"],
+                username=p["username"],
+                password=p["password"],
+                proxy_type=p["proxy_type"],
+            ))
+            added += 1
+    db.commit()
+    db.close()
+    return {"status": "ok", "added": added}
+
+@app.post("/proxies-text")
+async def upload_proxies_text(data: ProxyList):
+    db = SessionDB()
+    added = 0
+    for line in data.text.splitlines():
         p = parse_proxy(line)
         if p:
             db.add(Proxy(
