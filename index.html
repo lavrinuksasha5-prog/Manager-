@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>TWKS - Telegram Session Manager</title>
     <style>
         :root {
@@ -17,41 +17,52 @@
             --success: #22c55e;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        body { background-color: var(--bg-color); color: var(--text-main); padding: 20px; }
-        .container { max-width: 1400px; margin: 0 auto; }
-        h1 { font-size: 24px; margin-bottom: 20px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
-        .card { background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 20px; }
-        .card h2 { font-size: 16px; margin-bottom: 12px; color: var(--text-muted); font-weight: 500; }
-        textarea { width: 100%; height: 100px; background: #080b10; border: 1px solid var(--border-color); border-radius: 8px; color: #fff; padding: 10px; resize: none; font-size: 13px; margin-bottom: 10px; }
+        body { background-color: var(--bg-color); color: var(--text-main); padding: 12px; }
+        .container { width: 100%; max-width: 1400px; margin: 0 auto; }
+        
+        h1 { font-size: 18px; margin-bottom: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; line-height: 1.3; }
+        
+        /* Мобильный Grid: в столбец на экранах телефонов */
+        .grid { display: flex; flex-direction: column; gap: 12px; margin-bottom: 15px; }
+        
+        .card { background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 15px; }
+        .card h2 { font-size: 14px; margin-bottom: 10px; color: var(--text-muted); font-weight: 500; }
+        
+        textarea { width: 100%; height: 90px; background: #080b10; border: 1px solid var(--border-color); border-radius: 8px; color: #fff; padding: 10px; resize: none; font-size: 13px; margin-bottom: 10px; }
+        
         input[type="file"] { display: none; }
-        .file-upload { border: 2px dashed var(--border-color); border-radius: 8px; padding: 30px; text-align: center; cursor: pointer; transition: 0.2s; background: #080b10; }
+        .file-upload { border: 2px dashed var(--border-color); border-radius: 8px; padding: 20px 10px; text-align: center; cursor: pointer; transition: 0.2s; background: #080b10; display: block; }
         .file-upload:hover { border-color: var(--accent); }
-        button { background: var(--accent); color: #white; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 500; cursor: pointer; transition: 0.2s; }
+        
+        button { background: var(--accent); color: #fff; border: none; padding: 10px 16px; border-radius: 8px; font-weight: 500; cursor: pointer; transition: 0.2s; width: 100%; font-size: 14px; }
         button:hover { background: var(--accent-hover); }
-        .table-container { background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; margin-top: 20px; }
-        table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }
-        th, td { padding: 12px 16px; border-bottom: 1px solid var(--border-color); }
+
+        /* Адаптивная таблица / карточки для мобильных */
+        .table-container { background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 12px; overflow-x: auto; margin-top: 10px; -webkit-overflow-scrolling: touch; }
+        table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; min-width: 650px; }
+        th, td { padding: 10px 12px; border-bottom: 1px solid var(--border-color); white-space: nowrap; }
         th { background: #0f1520; color: var(--text-muted); font-weight: 500; }
         tr:hover { background: rgba(255,255,255,0.01); }
-        .badge { padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 500; display: inline-block; }
+        
+        .badge { padding: 3px 6px; border-radius: 6px; font-size: 10px; font-weight: 500; display: inline-block; }
         .badge-valid { background: rgba(34,197,94,0.1); color: var(--success); }
         .badge-error { background: rgba(239,68,68,0.1); color: var(--danger); }
         .badge-prem { background: rgba(234,179,8,0.1); color: #eab308; }
-        .actions { display: flex; gap: 8px; }
-        .btn-sm { padding: 6px 12px; font-size: 12px; }
+        
+        .actions { display: flex; gap: 6px; }
+        .btn-sm { padding: 6px 10px; font-size: 11px; width: auto; }
         .btn-danger { background: rgba(239,68,68,0.2); color: var(--danger); }
         .btn-danger:hover { background: var(--danger); color: #fff; }
-        .avatar { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; }
+        .avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>TWKS Panel — Параллельные сессии & Безопасность</h1>
+        <h1>TWKS Panel — Сессии & Безопасность</h1>
         
         <div class="grid">
             <div class="card">
-                <h2>Загрузка прокси (формат: ip:port:user:pass или ip:port)</h2>
+                <h2>Загрузка прокси (ip:port:user:pass)</h2>
                 <textarea id="proxyInput" placeholder="Вставьте прокси по одному на строку..."></textarea>
                 <button onclick="uploadProxies()">Загрузить прокси</button>
             </div>
@@ -59,7 +70,7 @@
             <div class="card">
                 <h2>Загрузка архива с tdata (ZIP)</h2>
                 <label class="file-upload" id="dropZone">
-                    <span id="uploadText">📁 Нажмите или перетащите ZIP с tdata сюда</span>
+                    <span id="uploadText" style="font-size: 13px; color: var(--text-muted);">📁 Выберите или перетащите ZIP с tdata</span>
                     <input type="file" id="zipFile" accept=".zip" onchange="uploadZip()">
                 </label>
             </div>
@@ -72,12 +83,12 @@
                         <th>Аватар</th>
                         <th>Телефон / User ID</th>
                         <th>Имя / Username</th>
-                        <th>Устройство (Фингерпринт)</th>
+                        <th>Устройство</th>
                         <th>Прокси / IP</th>
                         <th>Пинг</th>
                         <th>Премиум</th>
                         <th>Статус</th>
-                        <th>Дата создания</th>
+                        <th>Дата</th>
                         <th>Действия</th>
                     </tr>
                 </thead>
@@ -103,10 +114,10 @@
                 tbody.innerHTML = data.map(acc => `
                     <tr>
                         <td>${acc.avatar_url ? `<img src="${acc.avatar_url}" class="avatar">` : '👤'}</td>
-                        <td><strong>${acc.phone || 'N/A'}</strong><br><span style="color:var(--text-muted);font-size:11px">${acc.user_id || ''}</span></td>
-                        <td>${acc.first_name || ''}<br><span style="color:var(--text-muted);font-size:11px">@${acc.username || 'none'}</span></td>
+                        <td><strong>${acc.phone || 'N/A'}</strong><br><span style="color:var(--text-muted);font-size:10px">${acc.user_id || ''}</span></td>
+                        <td>${acc.first_name || ''}<br><span style="color:var(--text-muted);font-size:10px">@${acc.username || 'none'}</span></td>
                         <td><code>${acc.device || 'N/A'}</code></td>
-                        <td>${acc.proxy || 'N/A'}<br><span style="color:var(--text-muted);font-size:11px">${acc.ip || ''} (${acc.country || ''})</span></td>
+                        <td>${acc.proxy || 'N/A'}<br><span style="color:var(--text-muted);font-size:10px">${acc.ip || ''} (${acc.country || ''})</span></td>
                         <td>${acc.ping} ms</td>
                         <td>${acc.premium ? '<span class="badge badge-prem">⭐ Премиум</span>' : 'Нет'}</td>
                         <td>
@@ -115,7 +126,7 @@
                         <td>${acc.created_at || ''}</td>
                         <td>
                             <div class="actions">
-                                ${acc.status === 'valid' ? `<a href="/download/${acc.id}"><button class="btn-sm">💾 .session</button></a>` : ''}
+                                ${acc.status === 'valid' ? `<a href="/download/${acc.id}" style="text-decoration:none;"><button class="btn-sm">💾 .session</button></a>` : ''}
                                 <button class="btn-sm btn-danger" onclick="deleteAccount('${acc.id}')">Удалить</button>
                             </div>
                         </td>
@@ -146,11 +157,11 @@
             const formData = new FormData();
             formData.append('file', fileInput.files[0]);
             
-            document.getElementById('uploadText').innerText = '⏳ Создание параллельных сессий и валидация...';
+            document.getElementById('uploadTextinnerText = '⏳ Создание параллельных сессий...';
             
             await fetch('/upload', { method: 'POST', body: formData });
-            alert('Архив принят в работу! Сессии создаются в фоновом режиме. Обновите таблицу через минуту.');
-            document.getElementById('uploadText').innerText = '📁 Нажмите или перетащите ZIP с tdata сюда';
+            alert('Архив принят! Сессии создаются в фоне. Обновите страницу через минуту.');
+            document.getElementById('uploadText').innerText = '📁 Выберите или перетащите ZIP с tdata';
             fileInput.value = '';
             setTimeout(loadAccounts, 3000);
         }
