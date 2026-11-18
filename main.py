@@ -1,4 +1,4 @@
-import os, uuid, zipfile, time, random, asyncio
+import os, uuid, zipfile, time, random, asyncio, sqlite3
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -50,7 +50,7 @@ class Account(Base):
     premium = Column(Boolean, default=False)
     status = Column(String, default="pending")
     error_msg = Column(String, nullable=True)
-    tdata_path = Column(String, nullable=True) # Путь к распакованной tdata для последующего входа
+    tdata_path = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class Proxy(Base):
@@ -63,6 +63,16 @@ class Proxy(Base):
     proxy_type = Column(String, default="http")
 
 Base.metadata.create_all(engine)
+
+# Автомиграция для избежания ошибки отсутствия колонки tdata_path
+try:
+    conn = sqlite3.connect(str(db_file))
+    cursor = conn.cursor()
+    cursor.execute("ALTER TABLE accounts ADD COLUMN tdata_path TEXT;")
+    conn.commit()
+    conn.close()
+except Exception:
+    pass
 
 class ProxyList(BaseModel):
     text: str
@@ -128,7 +138,6 @@ def extract_tdata(zip_path: str) -> list:
     with zipfile.ZipFile(zip_path) as zf: zf.extractall(out)
     return [str(p) for p in out.rglob("*") if p.is_dir() and ((p / "key_datas").exists() or any(f.name.isupper() and len(f.name) == 16 for f in p.glob("*")))]
 
-# 1. Быстрая валидация исходной tdata при загрузке архива
 async def validate_tdata_base(tdata_path: str, proxy_dict: dict, acc_id: str):
     temp_session = SESS_DIR / f"{acc_id}_temp.session"
     if temp_session.exists(): temp_session.unlink()
@@ -170,7 +179,6 @@ async def validate_tdata_base(tdata_path: str, proxy_dict: dict, acc_id: str):
     finally:
         if temp_session.exists(): temp_session.unlink()
 
-# 2. Создание новой параллельной сессии при нажатии кнопки «Войти»
 @app.post("/login/{acc_id}")
 async def login_and_create_session(acc_id: str):
     db = SessionDB()
@@ -182,7 +190,6 @@ async def login_and_create_session(acc_id: str):
     tdata_path = acc.tdata_path
     proxy_parts = acc.proxy.split(":")
     proxy_dict = {"addr": proxy_parts[0], "port": int(proxy_parts[1])}
-    # если есть логин/пароль прокси, можно восстановить, но для простоты берем базовый прокси
 
     old_session_file = SESS_DIR / f"{acc_id}_old.session"
     if old_session_file.exists(): old_session_file.unlink()
@@ -211,7 +218,6 @@ async def login_and_create_session(acc_id: str):
         await new_client.connect()
         sent_code = await new_client.send_code_request(phone)
 
-        # Перехват кода из 777000
         code = None
         for _ in range(15):
             await asyncio.sleep(2)
@@ -327,7 +333,6 @@ def list_accounts():
             if local_file.exists():
                 avatar_path = r.avatar_url
         
-        # Проверяем, создана ли уже новая .session сессия
         session_file = SESS_DIR / f"{r.id}.session"
         has_session = session_file.exists()
 
