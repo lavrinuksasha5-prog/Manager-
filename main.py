@@ -234,7 +234,6 @@ async def update_proxy(acc_id: str, data: ProxyUpdate):
     p = parse_proxy(data.proxy_text)
     if not p: return {"status": "error", "message": "Неверный формат прокси"}
 
-    # Проверяем новый прокси
     proxy_dict = {"proxy_type": p["proxy_type"], "addr": p["addr"], "port": p["port"], "username": p["username"], "password": p["password"]}
     net_info, ping_ms = await get_proxy_info(proxy_dict)
 
@@ -295,19 +294,57 @@ async def open_web(acc_id: str):
     await client.disconnect()
 
     screenshot_path = STATIC_DIR / f"web_{acc_id}.png"
+
+    # Маппинг локалей и таймзон под гео
+    GEO_CONFIGS = {
+        "PT": {"locale": "pt-PT", "timezone": "Europe/Lisbon"},
+        "DE": {"locale": "de-DE", "timezone": "Europe/Berlin"},
+        "US": {"locale": "en-US", "timezone": "America/New_York"},
+        "GB": {"locale": "en-GB", "timezone": "Europe/London"},
+        "PL": {"locale": "pl-PL", "timezone": "Europe/Warsaw"},
+        "FR": {"locale": "fr-FR", "timezone": "Europe/Paris"},
+        "NL": {"locale": "nl-NL", "timezone": "Europe/Amsterdam"},
+        "ES": {"locale": "es-ES", "timezone": "Europe/Madrid"},
+        "TR": {"locale": "tr-TR", "timezone": "Europe/Istanbul"},
+    }
+    geo = GEO_CONFIGS.get(acc.country_code, {"locale": "en-US", "timezone": "UTC"})
+
     proxy_conf = None
     if proxy_row:
-        proxy_conf = {"server": f"socks5://{proxy_row.addr}:{proxy_row.port}"}
+        p_type = getattr(proxy_row, "proxy_type", "socks5")
+        # Если это SOCKS5 с логином/паролем, Chromium падает. Конвертируем в http или передаем корректно.
         if proxy_row.username and proxy_row.password:
-            proxy_conf["username"] = proxy_row.username
-            proxy_conf["password"] = proxy_row.password
+            proxy_conf = {
+                "server": f"http://{proxy_row.addr}:{proxy_row.port}",
+                "username": proxy_row.username,
+                "password": proxy_row.password
+            }
+        else:
+            proxy_conf = {"server": f"{p_type}://{proxy_row.addr}:{proxy_row.port}"}
 
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context(proxy=proxy_conf)
+            
+            context_args = {
+                "locale": geo["locale"],
+                "timezone_id": geo["timezone"],
+                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            }
+            if proxy_conf:
+                context_args["proxy"] = proxy_conf
+
+            context = await browser.new_context(**context_args)
+            
+            if proxy_row and proxy_row.username and proxy_row.password:
+                await context.set_http_credentials(username=proxy_row.username, password=proxy_row.password)
+
             page = await context.new_page()
-            await page.goto("https://web.telegram.org/k/", wait_until="domcontentloaded")
+            
+            # Скрываем флаг webdriver от антифрода
+            await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
+
+            await page.goto("https://web.telegram.org/k/", wait_until="domcontentloaded", timeout=60000)
             await page.evaluate(f"""
                 localStorage.setItem('dc{dc_id}_auth_key', '{auth_key}');
                 localStorage.setItem('user_auth', JSON.stringify({{ dcID: {dc_id}, id: '{acc.user_id}' }}));
