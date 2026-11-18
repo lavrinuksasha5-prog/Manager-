@@ -128,13 +128,32 @@ def extract_tdata(zip_path: str) -> list:
     out = UPLOAD_DIR / uuid.uuid4().hex
     out.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path) as zf: zf.extractall(out)
-    return [str(p) for p in out.rglob("*") if p.is_dir() and ((p / "key_datas").exists() or any(f.name.isupper() and len(f.name) == 16 for f in p.glob("*")))]
+    
+    found_paths = []
+    for p in out.rglob("*"):
+        if p.is_dir():
+            # Ищем папку, содержащую key_datas или файлы tdata
+            if (p / "key_datas").exists() or any(f.name.isupper() and len(f.name) == 16 for f in p.glob("*")):
+                found_paths.append(str(p))
+    return found_paths
+
+def locate_real_tdata(path_str: str) -> str:
+    """Точно находит директорию с файлами tdata, даже если путь обернут во вложенные папки"""
+    p = Path(path_str)
+    if (p / "key_datas").exists() or any(f.name.isupper() and len(f.name) == 16 for f in p.glob("*")):
+        return str(p)
+    for sub in p.rglob("*"):
+        if sub.is_dir():
+            if (sub / "key_datas").exists() or any(f.name.isupper() and len(f.name) == 16 for f in sub.glob("*")):
+                return str(sub)
+    return path_str
 
 async def validate_tdata_base(tdata_path: str, proxy_dict: dict, acc_id: str):
     temp_session = SESS_DIR / f"{acc_id}_temp.session"
     if temp_session.exists(): temp_session.unlink()
     try:
-        tdesk = TDesktop(tdata_path)
+        real_path = locate_real_tdata(tdata_path)
+        tdesk = TDesktop(real_path)
         client = await tdesk.ToTelethon(str(temp_session), UseCurrentSession)
         p_tuple = (socks.HTTP, proxy_dict['addr'], proxy_dict['port'], True, proxy_dict.get('username'), proxy_dict.get('password')) if proxy_dict.get('username') else (socks.HTTP, proxy_dict['addr'], proxy_dict['port'])
         client.proxy = p_tuple
@@ -174,28 +193,19 @@ async def validate_tdata_base(tdata_path: str, proxy_dict: dict, acc_id: str):
         if temp_session.exists(): temp_session.unlink()
 
 def find_2fa_password(tdata_path: str) -> str:
-    """Автоматически ищет 2FA пароль в папках и файлах tdata (поддерживает 2fa, 2FA, файлы с паролями)"""
+    """Ищет 2FA пароль в папках 2fa, 2FA, pass или файлах конфигурации"""
     try:
-        base_path = Path(tdata_path)
-        # Ищем файлы или папки с именами содержащими 2fa / 2FA / пароль
-        for path in base_path.rglob("*"):
+        base_path = Path(locate_real_tdata(tdata_path))
+        for path in base_path.parent.rglob("*"):
             name_lower = path.name.lower()
             if "2fa" in name_lower or "pass" in name_lower or "password" in name_lower:
                 if path.is_file():
-                    try:
-                        content = path.read_text(encoding="utf-8", errors="ignore").strip()
-                        if content and len(content) < 100:
-                            return content
-                    except Exception:
-                        pass
+                    content = path.read_text(encoding="utf-8", errors="ignore").strip()
+                    if content and len(content) < 100: return content
                 elif path.is_dir():
                     for sub_file in path.glob("*"):
-                        try:
-                            content = sub_file.read_text(encoding="utf-8", errors="ignore").strip()
-                            if content and len(content) < 100:
-                                return content
-                        except Exception:
-                            pass
+                        content = sub_file.read_text(encoding="utf-8", errors="ignore").strip()
+                        if content and len(content) < 100: return content
     except Exception:
         pass
     return None
@@ -208,7 +218,7 @@ async def login_and_create_session(acc_id: str):
         db.close()
         return JSONResponse({"error": "Аккаунт или tdata не найдены"}, status_code=404)
 
-    tdata_path = acc.tdata_path
+    tdata_path = locate_real_tdata(acc.tdata_path)
     p_parts = acc.proxy.split(":")
     proxy_addr = p_parts[0]
     proxy_port = int(p_parts[1])
@@ -268,13 +278,12 @@ async def login_and_create_session(acc_id: str):
         try:
             await new_client.sign_in(phone=phone, code=code, phone_code_hash=sent_code.phone_code_hash)
         except SessionPasswordNeededError:
-            # Автоматически ищем 2FA пароль в папках и файлах tdata (2fa / 2FA)
             password = find_2fa_password(tdata_path)
             if not password:
                 await old_client.disconnect()
                 await new_client.disconnect()
                 db.close()
-                return JSONResponse({"error": "Требуется 2FA пароль, но файл/папка 2FA не найдены в tdata"}, status_code=400)
+                return JSONResponse({"error": "Требуется 2FA пароль, но файл/папка 2FA не найдены"}, status_code=400)
             
             await new_client.sign_in(password=password)
 
