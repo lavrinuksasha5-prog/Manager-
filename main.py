@@ -70,8 +70,6 @@ def parse_proxy(line: str):
         line = line.replace("http://", "")
 
     user = passw = None
-    
-    # Жесткий и надежный парсинг: ищем хост и порт с конца строки
     if "@" in line:
         auth, addr_port = line.rsplit("@", 1)
         if ":" in auth:
@@ -83,7 +81,6 @@ def parse_proxy(line: str):
         else:
             return None
     else:
-        # Если формата user:pass@ip:port нет, но есть 4 части через двоеточие (ip:port:user:pass)
         parts = line.split(":")
         if len(parts) >= 4:
             host = parts[0]
@@ -142,16 +139,34 @@ def find_local_2fa(session_file_path: Path) -> str:
         pass
     return None
 
-async def validate_and_auth_session(session_path: Path, proxy_dict: dict, acc_id: str):
-    proxy_tuple = get_telethon_proxy_tuple(proxy_dict)
-    
-    API_ID = 2040
-    API_HASH = "b18441a1ff607e10a989891a5462e627"
-
-    client = TelegramClient(str(session_path), api_id=API_ID, api_hash=API_HASH, proxy=proxy_tuple)
-    net_info, ping_ms = await get_proxy_info(proxy_dict)
-    
+def is_valid_telethon_session(session_path: Path) -> bool:
+    """Предварительная проверка структуры базы, чтобы исключить Pyrogram и битые файлы"""
     try:
+        conn = sqlite3.connect(str(session_path))
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        tables = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        # У Telethon обязательно должны быть таблицы sessions или sent_files
+        if "sessions" not in tables:
+            return False
+        return True
+    except Exception:
+        return False
+
+async def validate_and_auth_session(session_path: Path, proxy_dict: dict, acc_id: str):
+    try:
+        if not is_valid_telethon_session(session_path):
+            return {"status": "error", "error_msg": "Неверный формат сессии (возможно, Pyrogram или повреждена база)"}
+
+        proxy_tuple = get_telethon_proxy_tuple(proxy_dict)
+        
+        API_ID = 2040
+        API_HASH = "b18441a1ff607e10a989891a5462e627"
+
+        client = TelegramClient(str(session_path), api_id=API_ID, api_hash=API_HASH, proxy=proxy_tuple)
+        net_info, ping_ms = await get_proxy_info(proxy_dict)
+        
         await client.connect()
         if not await client.is_user_authorized():
             password = find_local_2fa(session_path)
@@ -163,7 +178,7 @@ async def validate_and_auth_session(session_path: Path, proxy_dict: dict, acc_id
             
             if not await client.is_user_authorized():
                 await client.disconnect()
-                return {"status": "invalid", "error_msg": "Сессия не авторизована (нужен валидный вход или 2FA)"}
+                return {"status": "invalid", "error_msg": "Сессия не авторизована (требуется 2FA или неверные ключи)"}
         
         me = await client.get_me()
         avatar_url = None
@@ -187,47 +202,54 @@ async def validate_and_auth_session(session_path: Path, proxy_dict: dict, acc_id
             "error_msg": None
         }
     except Exception as e:
-        return {"status": "error", "error_msg": str(e)}
+        return {"status": "error", "error_msg": f"Ошибка инициализации: {str(e)}"}
 
 async def process_zip_archive(zip_path: Path):
     extract_to = UPLOAD_DIR / uuid.uuid4().hex
     extract_to.mkdir(parents=True, exist_ok=True)
     
-    with zipfile.ZipFile(zip_path, 'r') as zf:
-        zf.extractall(extract_to)
+    try:
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            zf.extractall(extract_to)
+    except Exception:
+        if zip_path.exists(): zip_path.unlink()
+        return
     
     session_files = list(extract_to.rglob("*.session"))
     db = SessionDB()
 
     for sf in session_files:
-        acc_id = uuid.uuid4().hex
-        session_dest = SESS_DIR / f"{acc_id}.session"
-        shutil.copy(str(sf), str(session_dest))
+        try:
+            acc_id = uuid.uuid4().hex
+            session_dest = SESS_DIR / f"{acc_id}.session"
+            shutil.copy(str(sf), str(session_dest))
 
-        _, proxy_dict = pop_free_proxy(db)
-        if not proxy_dict:
-            db.add(Account(id=acc_id, status="error", error_msg="Нет свободных прокси в базе"))
+            _, proxy_dict = pop_free_proxy(db)
+            if not proxy_dict:
+                db.add(Account(id=acc_id, status="error", error_msg="Нет свободных прокси в базе"))
+                db.commit()
+                continue
+
+            res = await validate_and_auth_session(session_dest, proxy_dict, acc_id)
+
+            db.add(Account(
+                id=acc_id,
+                user_id=res.get("user_id"),
+                username=res.get("username"),
+                first_name=res.get("first_name"),
+                phone=res.get("phone"),
+                avatar_url=res.get("avatar_url"),
+                proxy=f"{proxy_dict['addr']}:{proxy_dict['port']}",
+                ip=res.get("ip"),
+                ping=res.get("ping"),
+                country=res.get("country"),
+                premium=res.get("premium"),
+                status=res.get("status", "error"),
+                error_msg=res.get("error_msg")
+            ))
             db.commit()
-            continue
-
-        res = await validate_and_auth_session(session_dest, proxy_dict, acc_id)
-
-        db.add(Account(
-            id=acc_id,
-            user_id=res.get("user_id"),
-            username=res.get("username"),
-            first_name=res.get("first_name"),
-            phone=res.get("phone"),
-            avatar_url=res.get("avatar_url"),
-            proxy=f"{proxy_dict['addr']}:{proxy_dict['port']}",
-            ip=res.get("ip"),
-            ping=res.get("ping"),
-            country=res.get("country"),
-            premium=res.get("premium"),
-            status=res.get("status", "error"),
-            error_msg=res.get("error_msg")
-        ))
-        db.commit()
+        except Exception as inner_err:
+            print(f"Skipping file due to error: {inner_err}")
     db.close()
     if zip_path.exists(): zip_path.unlink()
 
