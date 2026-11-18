@@ -1,4 +1,4 @@
-import os, uuid, zipfile, random, hashlib, traceback
+import os, uuid, zipfile, random, traceback
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,18 +10,21 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 from opentele2.td import TDesktop
 from opentele2.api import API, UseCurrentSession
+from playwright.async_api import async_playwright
 
 # --- Конфиг ---
 DATA_DIR = Path("/data")
 SESS_DIR = DATA_DIR / "sessions"
 UPLOAD_DIR = Path("/app/uploads")
+STATIC_DIR = Path("/app/static")
 SESS_DIR.mkdir(parents=True, exist_ok=True)
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 # --- БД ---
 db_file = DATA_DIR / "twks.db"
 if db_file.exists():
-    db_file.unlink() # Удаляем старую базу при старте, чтобы обновить схему (добавили новые колонки)
+    db_file.unlink() # Удаляем старую базу при старте (обновление схемы)
 
 engine = create_engine(f"sqlite:///{db_file}")
 Base = declarative_base()
@@ -81,7 +84,6 @@ def parse_proxy(line: str):
     return {"proxy_type": proxy_type, "addr": host, "port": int(port), "username": user, "password": passw}
 
 def pop_free_proxy(db):
-    # Берем прокси без блокировки (для ротационных прокси один URL на всех)
     p = db.query(Proxy).first()
     if not p: return None, None
     return p, {"proxy_type": p.proxy_type, "addr": p.addr, "port": p.port, "username": p.username, "password": p.password}
@@ -102,9 +104,7 @@ def extract_tdata(zip_path: str) -> list:
 async def validate(tdata_path: str, proxy_dict: dict, acc_id: str):
     tdesk = TDesktop(tdata_path)
     session_file = SESS_DIR / f"{acc_id}.session"
-    
-    if session_file.exists():
-        session_file.unlink()
+    if session_file.exists(): session_file.unlink()
 
     client = await tdesk.ToTelethon(
         str(session_file), 
@@ -116,24 +116,14 @@ async def validate(tdata_path: str, proxy_dict: dict, acc_id: str):
     await client.connect()
     try:
         if not await client.is_user_authorized():
-            return {"status": "invalid", "error_msg": "Сессия не авторизована (бан/слет)"}
+            return {"status": "invalid", "error_msg": "Сессия не авторизована"}
         me = await client.get_me()
-        
-        is_premium = getattr(me, "premium", False)
-        
         return {
-            "status": "valid",
-            "user_id": me.id,
-            "username": me.username,
-            "phone": me.phone,
-            "device": "android_9.6.0",
-            "country": "Португалия",
-            "country_code": "PT",
-            "proxy_country": "Португалия",
-            "ip": "89.155.210.141",
-            "ping": 45,
-            "premium": is_premium,
-            "error_msg": None
+            "status": "valid", "user_id": me.id, "username": me.username,
+            "phone": me.phone, "device": "android_9.6.0",
+            "country": "Португалия", "country_code": "PT",
+            "proxy_country": "Португалия", "ip": "89.155.210.141", "ping": 45,
+            "premium": getattr(me, "premium", False), "error_msg": None
         }
     finally:
         await client.disconnect()
@@ -141,7 +131,7 @@ async def validate(tdata_path: str, proxy_dict: dict, acc_id: str):
 # --- API ---
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-app.mount("/static", StaticFiles(directory="."), name="static")
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 async def process_zip(zip_path: str):
     dirs = extract_tdata(zip_path)
@@ -151,19 +141,14 @@ async def process_zip(zip_path: str):
     for td in dirs:
         acc_id = str(uuid.uuid4())
         proxy_obj, proxy_dict = pop_free_proxy(db)
-        
         if not proxy_dict:
-            db.add(Account(id=acc_id, status="error", error_msg="Нет прокси в базе. Загрузите прокси перед импортом."))
+            db.add(Account(id=acc_id, status="error", error_msg="Нет прокси"))
             db.commit(); continue
 
         try:
             res = await validate(td, proxy_dict, acc_id)
-            
-            if res.get("phone") and res["phone"] in existing_phones:
-                continue # Пропускаем дубли
-
-            if res.get("phone"):
-                existing_phones.add(res["phone"])
+            if res.get("phone") and res["phone"] in existing_phones: continue
+            if res.get("phone"): existing_phones.add(res["phone"])
 
             db.add(Account(
                 id=acc_id, user_id=res.get("user_id"), username=res.get("username"),
@@ -216,13 +201,28 @@ def delete_account(acc_id: str):
     db.commit(); db.close()
     return {"status": "deleted"}
 
-# --- Заглушки для кнопок (сюда потом добавим Playwright) ---
 @app.post("/open-web/{acc_id}")
-def open_web(acc_id: str):
-    print(f"[ACTION] Открытие Web для {acc_id}")
-    return {"status": "ok", "message": "Web opener triggered"}
+async def open_web(acc_id: str):
+    db = SessionDB()
+    acc = db.query(Account).filter_by(id=acc_id).first()
+    db.close()
+    
+    if not acc: return {"status": "error", "message": "Аккаунт не найден"}
 
-@app.post("/buy-premium/{acc_id}")
-def buy_premium(acc_id: str):
-    print(f"[ACTION] Покупка Premium для {acc_id}")
-    return {"status": "ok", "message": "Premium purchase triggered"}
+    screenshot_path = STATIC_DIR / f"web_{acc_id}.png"
+    proxy_conf = None
+    if acc.proxy and acc.proxy != "direct":
+        host, port = acc.proxy.split(":")
+        proxy_conf = {"server": f"http://{host}:{port}"}
+
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(proxy=proxy_conf)
+            page = await context.new_page()
+            await page.goto("https://web.telegram.org/k/", wait_until="networkidle")
+            await page.screenshot(path=str(screenshot_path))
+            await browser.close()
+            return {"status": "ok", "screenshot": f"/static/web_{acc_id}.png"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
