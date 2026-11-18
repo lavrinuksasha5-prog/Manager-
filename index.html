@@ -22,63 +22,69 @@
             <div class="w-8 h-8 bg-blue-500 rounded-xl flex items-center justify-center text-white font-bold shadow-lg shadow-blue-500/30">T</div>
             <h1 class="text-[17px] font-bold tracking-tight">Менеджер</h1>
         </div>
-        <div class="flex gap-2">
-            <button onclick="openProxyModal()" class="bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 px-3 py-2 rounded-xl text-xs font-semibold transition-all active:scale-95 border border-amber-500/30">Прокси</button>
-            <button onclick="openImportModal()" class="bg-slate-800 hover:bg-slate-700 text-white px-3 py-2 rounded-xl text-xs font-semibold transition-all active:scale-95 flex items-center gap-1.5 border border-slate-700/50">
-                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"></path></svg>Импорт
-            </button>
-        </div>
+        <button onclick="openImportModal()" class="bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-xl text-xs font-semibold transition-all active:scale-95 flex items-center gap-1.5 border border-slate-700/50">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"></path></svg>
+            Импорт
+        </button>
     </nav>
 
     <main class="max-w-2xl mx-auto mt-4 px-3 space-y-2.5">
         <div id="empty-state" class="text-center py-20 opacity-40">
-            <svg class="w-14 h-14 mx-auto mb-4 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
             <p class="text-sm font-medium">Нет аккаунтов</p>
         </div>
         <div id="accounts-grid" class="space-y-2.5"></div>
     </main>
 
-    <!-- Модалка Импорта (ZIP) -->
+    <!-- Модалка Импорта (Прокси + ZIP сразу) -->
     <div id="import-modal" class="fixed inset-0 bg-[#0B1120]/80 backdrop-blur-md hidden items-end sm:items-center justify-center z-50 transition-opacity">
         <div class="bg-[#1E293B] rounded-t-[2rem] sm:rounded-[2rem] w-full max-w-md p-6 shadow-2xl relative border border-slate-700/50">
             <div class="flex justify-between items-center mb-5">
-                <h2 class="text-lg font-bold text-white">Импорт tdata</h2>
+                <h2 class="text-lg font-bold text-white">Импорт</h2>
                 <button onclick="closeImportModal()" class="text-slate-400 hover:text-white bg-slate-800 p-2 rounded-full"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg></button>
             </div>
+            
+            <div class="mb-4">
+                <label class="block text-xs font-medium text-slate-400 mb-1.5">Прокси (по одному в строке)</label>
+                <textarea id="proxy-textarea" rows="3" placeholder="socks5://user:pass@ip:port" class="block w-full text-sm p-3 bg-[#0F172A] border border-slate-700 rounded-xl focus:ring-1 focus:ring-blue-500 outline-none resize-none text-slate-200 placeholder-slate-600 transition"></textarea>
+            </div>
+
             <div class="mb-5">
                 <label class="block text-xs font-medium text-slate-400 mb-1.5">ZIP с tdata</label>
-                <div class="relative border border-dashed border-slate-600 hover:border-blue-500 transition rounded-xl p-4 text-center cursor-pointer bg-[#0F172A]">
+                <div class="relative border border-dashed border-slate-600 hover:border-blue-500 transition rounded-xl p-3 text-center cursor-pointer bg-[#0F172A]">
                     <input type="file" id="zip-input" accept=".zip" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
                     <p id="file-name" class="text-xs text-slate-400">Нажмите, чтобы выбрать файл</p>
                 </div>
             </div>
+
             <button onclick="startImport()" id="import-btn" class="w-full bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold py-3 rounded-xl transition-all active:scale-95 flex justify-center items-center gap-2">
                 <span id="btn-text">Запустить проверку</span>
             </button>
         </div>
     </div>
 
-    <!-- Модалка Прокси -->
-    <div id="proxy-modal" class="fixed inset-0 bg-[#0B1120]/80 backdrop-blur-md hidden items-end sm:items-center justify-center z-50 transition-opacity">
+    <!-- Модалка смены прокси -->
+    <div id="change-proxy-modal" class="fixed inset-0 bg-[#0B1120]/80 backdrop-blur-md hidden items-end sm:items-center justify-center z-50 transition-opacity">
         <div class="bg-[#1E293B] rounded-t-[2rem] sm:rounded-[2rem] w-full max-w-md p-6 shadow-2xl relative border border-slate-700/50">
             <div class="flex justify-between items-center mb-5">
-                <h2 class="text-lg font-bold text-white">Загрузка прокси</h2>
+                <h2 class="text-lg font-bold text-white">Сменить прокси</h2>
                 <button onclick="closeProxyModal()" class="text-slate-400 hover:text-white bg-slate-800 p-2 rounded-full"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg></button>
             </div>
             <div class="mb-5">
-                <label class="block text-xs font-medium text-slate-400 mb-1.5">Список прокси (каждый с новой строки)</label>
-                <textarea id="proxy-textarea" rows="6" placeholder="socks5://user:pass@ip:port" class="block w-full text-sm p-3 bg-[#0F172A] border border-slate-700 rounded-xl focus:ring-1 focus:ring-blue-500 outline-none resize-none text-slate-200 placeholder-slate-600"></textarea>
+                <label class="block text-xs font-medium text-slate-400 mb-1.5">Новый прокси</label>
+                <input type="text" id="new-proxy-input" placeholder="socks5://user:pass@ip:port" class="block w-full text-sm p-3 bg-[#0F172A] border border-slate-700 rounded-xl focus:ring-1 focus:ring-blue-500 outline-none text-slate-200">
             </div>
-            <button onclick="saveProxies()" id="proxy-btn" class="w-full bg-amber-600 hover:bg-amber-500 text-white text-sm font-bold py-3 rounded-xl transition-all active:scale-95">Сохранить прокси</button>
+            <button onclick="saveProxy()" id="change-proxy-btn" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold py-3 rounded-xl transition-all active:scale-95">Сохранить</button>
         </div>
     </div>
 
     <script>
         const API_URL = '';
+        let currentAccId = null;
+
         function openImportModal() { document.getElementById('import-modal').classList.remove('hidden'); document.getElementById('import-modal').classList.add('flex'); }
         function closeImportModal() { document.getElementById('import-modal').classList.add('hidden'); document.getElementById('import-modal').classList.remove('flex'); }
-        function openProxyModal() { document.getElementById('proxy-modal').classList.remove('hidden'); document.getElementById('proxy-modal').classList.add('flex'); }
-        function closeProxyModal() { document.getElementById('proxy-modal').classList.add('hidden'); document.getElementById('proxy-modal').classList.remove('flex'); }
+        function openProxyModal(id) { currentAccId = id; document.getElementById('change-proxy-modal').classList.remove('hidden'); document.getElementById('change-proxy-modal').classList.add('flex'); }
+        function closeProxyModal() { document.getElementById('change-proxy-modal').classList.add('hidden'); document.getElementById('change-proxy-modal').classList.remove('flex'); }
 
         document.getElementById('zip-input').addEventListener('change', function(e) {
             const fileName = e.target.files[0]?.name || 'Нажмите, чтобы выбрать файл';
@@ -99,13 +105,13 @@
             const empty = document.getElementById('empty-state');
             if (!accounts || accounts.length === 0) { grid.innerHTML = ''; empty.classList.remove('hidden'); return; }
             empty.classList.add('hidden');
+            
             grid.innerHTML = accounts.map((acc, index) => {
                 const isPremium = acc.premium ? '<span class="text-emerald-400 text-xs font-medium">Да</span>' : '<span class="text-slate-500 text-xs font-medium">Нет</span>';
                 const statusBadge = acc.status === 'valid' 
                     ? '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">ONLINE</span>' 
                     : '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-red-500/10 text-red-400 border border-red-500/20">ERROR</span>';
-                
-                // Аватарка или дефолтная буква
+
                 const avatarHtml = acc.avatar_url 
                     ? `<img src="${acc.avatar_url}" class="w-9 h-9 rounded-full object-cover border border-slate-700">`
                     : `<div class="w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-bold text-sm">${(acc.first_name || acc.username || 'A')[0].toUpperCase()}</div>`;
@@ -149,9 +155,12 @@
                         <div class="bg-slate-800/40 rounded-lg p-1.5 border border-slate-700/30 flex flex-col justify-center"><span class="text-slate-500 mb-0.5">Пинг</span><span class="text-amber-400 font-mono">${acc.ping || 0}ms</span></div>
                         <div class="bg-slate-800/40 rounded-lg p-1.5 border border-slate-700/30 flex flex-col justify-center"><span class="text-slate-500 mb-0.5">Premium</span>${isPremium}</div>
                     </div>
-                    <div class="bg-slate-900/60 rounded-lg px-2 py-1.5 mb-2.5 flex items-center justify-between border border-slate-700/40">
-                        <p class="text-[10px] text-slate-400 truncate w-11/12 font-mono">${acc.proxy}</p>
-                        <svg class="w-3.5 h-3.5 text-slate-500 cursor-pointer hover:text-white" onclick="navigator.clipboard.writeText('${acc.proxy}')" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                    <div class="bg-slate-900/60 rounded-lg px-2 py-1.5 mb-2.5 flex items-center justify-between border border-slate-700/40 group/proxy">
+                        <p class="text-[10px] text-slate-400 truncate w-9/12 font-mono">${acc.proxy}</p>
+                        <div class="flex items-center gap-1">
+                            <button onclick="openProxyModal('${acc.id}')" class="text-[9px] bg-slate-700 hover:bg-slate-600 text-slate-300 px-1.5 py-1 rounded transition">Сменить</button>
+                            <svg class="w-3.5 h-3.5 text-slate-500 cursor-pointer hover:text-white" onclick="navigator.clipboard.writeText('${acc.proxy}')" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                        </div>
                     </div>
                     <div class="flex gap-1.5">
                         <button onclick="buyPremium('${acc.id}')" class="flex-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 text-[11px] font-semibold py-2 rounded-lg transition active:scale-95 flex items-center justify-center gap-1">Купить</button>
@@ -187,16 +196,21 @@
         }
 
         async function startImport() {
+            const proxyText = document.getElementById('proxy-textarea').value.trim();
             const zipFile = document.getElementById('zip-input').files[0];
-            if (!zipFile) { alert('Выберите ZIP'); return; }
+            
+            if (!proxyText || !zipFile) { alert('Вставьте прокси и выберите ZIP'); return; }
 
             const btn = document.getElementById('import-btn');
             const btnText = document.getElementById('btn-text');
             btn.disabled = true; btn.classList.add('opacity-75'); btnText.innerText = 'Загрузка...';
 
             try {
+                await fetch(`${API_URL}/proxies-text`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: proxyText }) });
+
                 const zipData = new FormData(); zipData.append('file', zipFile);
                 await fetch(`${API_URL}/upload`, { method: 'POST', body: zipData });
+
                 setTimeout(() => { loadAccounts(); closeImportModal(); btn.disabled = false; btn.classList.remove('opacity-75'); btnText.innerText = 'Запустить проверку'; }, 5000);
             } catch (e) {
                 alert('Ошибка: ' + e.message);
@@ -204,28 +218,12 @@
             }
         }
 
-        async function saveProxies() {
-            const proxyText = document.getElementById('proxy-textarea').value.trim();
-            if (!proxyText) return;
-            
-            const btn = document.getElementById('proxy-btn');
+        async function saveProxy() {
+            const proxyText = document.getElementById('new-proxy-input').value.trim();
+            if (!proxyText) { alert('Введите прокси'); return; }
+
+            const btn = document.getElementById('change-proxy-btn');
             btn.innerText = 'Сохранение...'; btn.disabled = true;
 
             try {
-                await fetch(`${API_URL}/proxies-text`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: proxyText }) });
-                setTimeout(() => {
-                    closeProxyModal();
-                    document.getElementById('proxy-textarea').value = '';
-                    btn.innerText = 'Сохранить прокси'; btn.disabled = false;
-                }, 1000);
-            } catch (e) {
-                alert('Ошибка: ' + e.message);
-                btn.innerText = 'Сохранить прокси'; btn.disabled = false;
-            }
-        }
-
-        loadAccounts();
-        setInterval(loadAccounts, 10000);
-    </script>
-</body>
-</html>
+                const res = await
